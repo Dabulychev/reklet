@@ -7,7 +7,7 @@ from datetime import date
 st.set_page_config(page_title="Reklet — Production Management", layout="wide")
 
 # PostgreSQL connection settings in Supabase
-DB_HOST = "db.lnkaohubtchmsiniepoc.supabase.co"
+DB_HOST = "lnkaohubtchmsiniepoc.supabase.co"
 DB_PORT = "5432"
 DB_NAME = "postgres"
 DB_USER = "postgres"
