@@ -317,7 +317,7 @@ elif menu == "Objects":
             except Exception as e:
                 st.info("Error loading items: " + str(e))
 
-            # 1. Блок ДОБАВЛЕНИЯ изделий
+            # 1. СНАЧАЛА БЛОК ДОБАВЛЕНИЯ ИЗДЕЛИЙ
             st.markdown("---")
             st.markdown("##### Add Item from Templates")
             
@@ -331,28 +331,26 @@ elif menu == "Objects":
                     )
                 else:
                     templates_df = run_query("SELECT id, name, client_name FROM reklet.product_templates ORDER BY id", fetch=True)
-                    
-                templates_dict = {}
-                if not templates_df.empty:
-                    for _, row in templates_df.iterrows():
-                        c_name = row['client_name'] if pd.notna(row['client_name']) and row['client_name'] != "" else "No Client"
-                        templates_dict[f"{c_name} — {row['name']}"] = int(row['id'])
             except:
-                templates_dict = {}
+                templates_df = pd.DataFrame()
 
-            if templates_dict:
-                with st.form("form_add_item_to_obj"):
-                    selected_template_label = st.selectbox("Product Template", list(templates_dict.keys()), key="target_template_add")
-                    template_id = templates_dict[selected_template_label]
+            if not templates_df.empty:
+                template_options = []
+                template_map = {}
+                for _, row in templates_df.iterrows():
+                    t_id = int(row['id'])
+                    t_name = str(row['name'])
+                    c_name = str(row['client_name']) if pd.notna(row['client_name']) and row['client_name'] != "" else "No Client"
                     
-                    # Безопасно извлекаем имя изделия
-                    if " — " in selected_template_label:
-                        item_custom_name = selected_template_label.split(" — ", 1)[1]
-                    else:
-                        item_custom_name = selected_template_label
+                    label = f"{c_name} — {t_name}"
+                    template_options.append(label)
+                    template_map[label] = (t_id, t_name)
+
+                with st.form(f"form_add_item_to_obj_{current_obj_id}"):
+                    selected_template_label = st.selectbox("Product Template", template_options, key=f"target_template_add_{current_obj_id}")
+                    template_id, item_custom_name = template_map[selected_template_label]
                     
-                    item_qty = st.number_input("Total Quantity", min_value=1, value=1, key="input_item_qty")
-                    
+                    item_qty = st.number_input("Total Quantity", min_value=1, value=1, key=f"input_item_qty_{current_obj_id}")
                     submitted_add_item = st.form_submit_button("Add Item to Object")
                     
                     if submitted_add_item:
@@ -366,9 +364,9 @@ elif menu == "Objects":
                         except Exception as e:
                             st.error(f"Error: {e}")
             else:
-                st.warning("No templates available for the selected filter. Check Product Templates section.")
+                st.warning("No templates available. Please add products in the 'Product Templates' section first.")
 
-            # 2. Блок УДАЛЕНИЯ (если ошиблись)
+            # 2. ПОТОМ БЛОК УДАЛЕНИЯ (если ошиблись)
             try:
                 df_obj_items_del = run_query("SELECT id, item_name FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
                 if not df_obj_items_del.empty:
@@ -389,7 +387,7 @@ elif menu == "Objects":
             except:
                 pass
 
-            # 3. Кнопка скачивания HTML файла для печати
+            # 3. КНОПКА СКАЧИВАНИЯ HTML ДЛЯ ПЕЧАТИ
             st.markdown("---")
             try:
                 print_items = run_query("SELECT item_name, quantity FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
