@@ -104,7 +104,7 @@ authenticator = stauth.Authenticate(
 )
 
 # Исправленная строчка вызова логина (используется параметр location)
-name, authentication_status, username = authenticator.login('Login', location='sidebar')
+name, authentication_status, username = authenticator.login('Login')
 
 if authentication_status == False:
     st.error('Неверное имя пользователя или пароль')
