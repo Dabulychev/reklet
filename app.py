@@ -98,7 +98,7 @@ if not st.session_state['authentication_status']:
         submit_login = st.form_submit_button("Login")
         
         if submit_login:
-            if username_input == "admin" and password_input == "12345":
+            if username_input == "admin" and password_input == "qwert12345":
                 st.session_state['authentication_status'] = True
                 st.session_state['username'] = "admin"
                 st.session_state['name'] = "Administrator"
