@@ -6,11 +6,11 @@ from datetime import date
 # Set wide layout so the horizontal menu looks clean and neat
 st.set_page_config(page_title="Reklet — Production Management", layout="wide")
 
-# PostgreSQL connection settings in Supabase
-DB_HOST = "lnkaohubtchmsiniepoc.supabase.co"
+# PostgreSQL connection settings in Supabase (через Session Pooler)
+DB_HOST = "aws-0-us-west-2.pooler.supabase.com"
 DB_PORT = "5432"
 DB_NAME = "postgres"
-DB_USER = "postgres"
+DB_USER = "postgres.lnkaohubtchmsiniepoc"
 DB_PASSWORD = "4$#J9aXBHumnr$u"
 
 @st.cache_resource
@@ -21,7 +21,7 @@ def get_connection():
         database=DB_NAME,
         user=DB_USER,
         password=DB_PASSWORD,
-        connect_timeout=5  # Тайм-аут 5 секунд, чтобы приложение не зависало наглухо
+        connect_timeout=5  # Защита от зависания сети
     )
 
 def run_query(query, params=None, fetch=False):
