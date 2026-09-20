@@ -314,7 +314,7 @@ elif menu == "Objects":
             except Exception as e:
                 st.info("Error loading items: " + str(e))
 
-            # 1. БЛОК ДОБАВЛЕНИЯ ИЗДЕЛИЙ (С защищенным маппингом)
+            # 1. БЛОК ДОБАВЛЕНИЯ ИЗДЕЛИЙ
             st.markdown("---")
             st.markdown("##### Add Item from Templates")
             
@@ -332,20 +332,11 @@ elif menu == "Objects":
                 templates_df = pd.DataFrame()
 
             if not templates_df.empty:
-                template_options = []
-                template_map = {}
-                for _, row in templates_df.iterrows():
-                    t_id = int(row['id'])
-                    t_name = str(row['name'])
-                    c_name = str(row['client_name']) if pd.notna(row['client_name']) and row['client_name'] != "" else "No Client"
-                    
-                    label = f"{c_name} — {t_name}"
-                    template_options.append(label)
-                    template_map[label] = (t_id, t_name)
+                templates_dict = {f"{row['name']} (ID: {row['id']})": (int(row['id']), str(row['name'])) for _, row in templates_df.iterrows()}
 
                 with st.form(f"form_add_item_to_obj_{current_obj_id}"):
-                    selected_template_label = st.selectbox("Product Template", template_options, key=f"target_template_add_{current_obj_id}")
-                    template_id, item_custom_name = template_map[selected_template_label]
+                    selected_template_label = st.selectbox("Product Template", list(templates_dict.keys()), key=f"target_template_add_{current_obj_id}")
+                    template_id, item_custom_name = templates_dict[selected_template_label]
                     
                     item_qty = st.number_input("Total Quantity", min_value=1, value=1, key=f"input_item_qty_{current_obj_id}")
                     submitted_add_item = st.form_submit_button("Add Item to Object")
@@ -363,34 +354,27 @@ elif menu == "Objects":
             else:
                 st.warning("No templates available. Please add products in the 'Product Templates' section first.")
 
-            # 2. БЛОК УДАЛЕНИЯ (Без ошибок со split)
+            # 2. БЛОК УДАЛЕНИЯ
             try:
                 df_obj_items_del = run_query("SELECT id, item_name FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
                 if not df_obj_items_del.empty:
                     st.markdown("---")
                     st.markdown("##### Delete Mistaken Item")
                     
-                    del_options = []
-                    del_map = {}
-                    for idx, row in df_obj_items_del.iterrows():
-                        d_id = int(row['id'])
-                        d_name = str(row['item_name'])
-                        d_label = f"ID {d_id} — {d_name}"
-                        del_options.append(d_label)
-                        del_map[d_label] = d_id
+                    del_dict = {f"{row['item_name']} (ID: {row['id']})": int(row['id']) for _, row in df_obj_items_del.iterrows()}
 
                     col_del1, col_del2 = st.columns([2, 1])
                     with col_del1:
-                        selected_del_label = st.selectbox("Select item to delete", del_options, key=f"del_item_sel_{current_obj_id}")
+                        selected_del_label = st.selectbox("Select item to delete", list(del_dict.keys()), key=f"del_item_sel_{current_obj_id}")
                     with col_del2:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("Delete Selected Item", key=f"btn_del_item_{current_obj_id}"):
-                            item_id_to_del = del_map[selected_del_label]
+                            item_id_to_del = del_dict[selected_del_label]
                             run_query("DELETE FROM reklet.object_items WHERE id = %s", (item_id_to_del,))
                             st.success("Item successfully deleted!")
                             st.rerun()
             except Exception as ex_del:
-                st.info("No items to delete or load error.")
+                pass
 
             # 3. КНОПКА СКАЧИВАНИЯ HTML ДЛЯ ПЕЧАТИ
             st.markdown("---")
