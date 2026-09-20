@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
+import uuid
 from html import escape
 
 
@@ -64,6 +65,9 @@ DB_PASSWORD = "YOUR_DATABASE_PASSWORD"
 @st.cache_resource
 def get_connection():
 
+    # This connection is used only for application startup/migrations.
+    # Authenticated sessions use their own connection below so demo
+    # transactions are isolated from other users.
     return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -75,12 +79,55 @@ def get_connection():
     )
 
 
+def get_session_connection():
+
+    if "db_connection" not in st.session_state:
+        st.session_state["db_connection"] = psycopg2.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            connect_timeout=10,
+            sslmode="require"
+        )
+
+    return st.session_state["db_connection"]
+
+
+def close_demo_connection():
+
+    conn = st.session_state.pop("db_connection", None)
+
+    if conn is not None:
+        try:
+            if not conn.closed:
+                conn.rollback()
+                conn.close()
+        except Exception:
+            pass
+
+
 def run_query(query, params=None, fetch=False):
 
-    conn = get_connection()
+    # Admin keeps the existing committed-database behaviour.
+    # Demo users work inside one PostgreSQL transaction for their entire
+    # Streamlit session. All INSERT/UPDATE/DELETE operations are therefore
+    # visible to the demo user, but never committed to the real database.
+    if st.session_state.get("demo_mode", False):
+        conn = get_session_connection()
+    else:
+        conn = get_connection()
+
     cursor = conn.cursor()
+    demo = st.session_state.get("demo_mode", False)
+    savepoint = None
 
     try:
+
+        if demo:
+            savepoint = f"demo_sp_{uuid.uuid4().hex}"
+            cursor.execute(f'SAVEPOINT {savepoint}')
 
         cursor.execute(query, params)
 
@@ -93,18 +140,33 @@ def run_query(query, params=None, fetch=False):
                 for description in cursor.description
             ]
 
-            return pd.DataFrame(
+            result = pd.DataFrame(
                 rows,
                 columns=columns
             )
 
-        conn.commit()
+            if demo:
+                cursor.execute(f'RELEASE SAVEPOINT {savepoint}')
+
+            return result
+
+        if demo:
+            cursor.execute(f'RELEASE SAVEPOINT {savepoint}')
+        else:
+            conn.commit()
 
         return None
 
     except Exception:
 
-        conn.rollback()
+        if demo and savepoint:
+            try:
+                cursor.execute(f'ROLLBACK TO SAVEPOINT {savepoint}')
+                cursor.execute(f'RELEASE SAVEPOINT {savepoint}')
+            except Exception:
+                conn.rollback()
+        else:
+            conn.rollback()
 
         raise
 
@@ -400,9 +462,11 @@ if not st.session_state["authentication_status"]:
                 st.session_state["username"] = "demo"
                 st.session_state["name"] = "Demo User"
 
-                # Demo flag.
-                # Transaction logic will be added in Step 4.
+                # Demo mode uses a private, uncommitted PostgreSQL
+                # transaction. The user can create/edit/delete anything
+                # during the session, but none of it reaches the real DB.
                 st.session_state["demo_mode"] = True
+                get_session_connection().rollback()
 
                 st.rerun()
 
@@ -428,9 +492,17 @@ if not st.session_state["authentication_status"]:
 
 if st.sidebar.button("Logout"):
 
+    # Demo data exists only inside the current PostgreSQL transaction.
+    # Roll it back and close the session connection before logging out.
+    if st.session_state.get("demo_mode", False):
+        close_demo_connection()
+
     st.session_state[
         "authentication_status"
     ] = None
+    st.session_state["demo_mode"] = False
+    st.session_state.pop("username", None)
+    st.session_state.pop("name", None)
 
     st.rerun()
 
