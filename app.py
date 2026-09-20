@@ -21,7 +21,7 @@ def get_connection():
         database=DB_NAME,
         user=DB_USER,
         password=DB_PASSWORD,
-        connect_timeout=5  # Защита от зависания сети
+        connect_timeout=5
     )
 
 def run_query(query, params=None, fetch=False):
@@ -109,14 +109,11 @@ if not st.session_state['authentication_status']:
     
     st.stop()
 
-# Кнопка выхода в боковой панели
 if st.sidebar.button('Выйти'):
     st.session_state['authentication_status'] = None
     st.rerun()
 
 # --- ОСНОВНОЙ КОД ПРИЛОЖЕНИЯ ---
-
-# TOP HORIZONTAL MENU
 menu_options = [
     "Clients",
     "Objects",
@@ -317,7 +314,7 @@ elif menu == "Objects":
             except Exception as e:
                 st.info("Error loading items: " + str(e))
 
-            # 1. СНАЧАЛА БЛОК ДОБАВЛЕНИЯ ИЗДЕЛИЙ
+            # 1. БЛОК ДОБАВЛЕНИЯ ИЗДЕЛИЙ (С защищенным маппингом)
             st.markdown("---")
             st.markdown("##### Add Item from Templates")
             
@@ -366,26 +363,34 @@ elif menu == "Objects":
             else:
                 st.warning("No templates available. Please add products in the 'Product Templates' section first.")
 
-            # 2. ПОТОМ БЛОК УДАЛЕНИЯ (если ошиблись)
+            # 2. БЛОК УДАЛЕНИЯ (Без ошибок со split)
             try:
                 df_obj_items_del = run_query("SELECT id, item_name FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
                 if not df_obj_items_del.empty:
                     st.markdown("---")
                     st.markdown("##### Delete Mistaken Item")
+                    
+                    del_options = []
+                    del_map = {}
+                    for idx, row in df_obj_items_del.iterrows():
+                        d_id = int(row['id'])
+                        d_name = str(row['item_name'])
+                        d_label = f"ID {d_id} — {d_name}"
+                        del_options.append(d_label)
+                        del_map[d_label] = d_id
+
                     col_del1, col_del2 = st.columns([2, 1])
                     with col_del1:
-                        del_list = [f"{i+1} — {row['item_name']}" for i, (_, row) in enumerate(df_obj_items_del.iterrows())]
-                        item_to_del = st.selectbox("Select item to delete", del_list, key=f"del_item_sel_{current_obj_id}")
+                        selected_del_label = st.selectbox("Select item to delete", del_options, key=f"del_item_sel_{current_obj_id}")
                     with col_del2:
                         st.markdown("<br>", unsafe_allow_html=True)
                         if st.button("Delete Selected Item", key=f"btn_del_item_{current_obj_id}"):
-                            selected_index = int(item_to_del.split(" — ")[0]) - 1
-                            item_id_to_del = int(df_obj_items_del.iloc[selected_index]['id'])
+                            item_id_to_del = del_map[selected_del_label]
                             run_query("DELETE FROM reklet.object_items WHERE id = %s", (item_id_to_del,))
                             st.success("Item successfully deleted!")
                             st.rerun()
-            except:
-                pass
+            except Exception as ex_del:
+                st.info("No items to delete or load error.")
 
             # 3. КНОПКА СКАЧИВАНИЯ HTML ДЛЯ ПЕЧАТИ
             st.markdown("---")
