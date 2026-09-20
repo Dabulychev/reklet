@@ -317,7 +317,7 @@ elif menu == "Objects":
             except Exception as e:
                 st.info("Error loading items: " + str(e))
 
-            # 1. Сначала блок ДОБАВЛЕНИЯ изделий
+            # 1. Блок ДОБАВЛЕНИЯ изделий
             st.markdown("---")
             st.markdown("##### Add Item from Templates")
             
@@ -363,7 +363,7 @@ elif menu == "Objects":
             else:
                 st.warning("No templates available for the selected filter. Check Product Templates section.")
 
-            # 2. Затем блок УДАЛЕНИЯ (если ошиблись)
+            # 2. Блок УДАЛЕНИЯ (если ошиблись)
             try:
                 df_obj_items_del = run_query("SELECT id, item_name FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
                 if not df_obj_items_del.empty:
@@ -384,56 +384,61 @@ elif menu == "Objects":
             except:
                 pass
 
-            # 3. Кнопка печати HTML в новом окне
+            # 3. Кнопка скачивания HTML файла для печати
             st.markdown("---")
-            if st.button("🖨️ Печать в новом окне (HTML)", key=f"print_html_{current_obj_id}"):
-                try:
-                    print_items = run_query("SELECT item_name, quantity FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
-                    rows_html = ""
-                    if not print_items.empty:
-                        for idx, r in print_items.iterrows():
-                            rows_html += f"<tr><td style='border: 1px solid #ddd; padding: 8px;'>{idx+1}</td><td style='border: 1px solid #ddd; padding: 8px;'>{r['item_name']}</td><td style='border: 1px solid #ddd; padding: 8px; text-align: center;'>{r['quantity']}</td></tr>"
-                    
-                    html_content = f"""
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="utf-8">
-                        <title>Object Specification - {selected_obj_row['object_name']}</title>
-                        <style>
-                            body {{ font-family: Arial, sans-serif; margin: 30px; color: #333; }}
-                            h2 {{ border-bottom: 2px solid #333; padding-bottom: 5px; }}
-                            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
-                            th {{ background-color: #f4f4f4; border: 1px solid #ddd; padding: 10px; text-align: left; }}
-                        </style>
-                    </head>
-                    <body>
-                        <h2>Спецификация заказа</h2>
-                        <p><strong>Заказчик:</strong> {current_client_name}</p>
-                        <p><strong>Объект:</strong> {selected_obj_row['object_name']}</p>
-                        <p><strong>Адрес:</strong> {selected_obj_row['address']}</p>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>№</th>
-                                    <th>Наименование изделия</th>
-                                    <th style="text-align: center;">Количество</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {rows_html}
-                            </tbody>
-                        </table>
-                        <script>window.print();</script>
-                    </body>
-                    </html>
-                    """
-                    import base64
-                    b64 = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
-                    html_link = f'<a href="data:text/html;base64,{b64}" target="_blank" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">Нажмите сюда для открытия печатной формы в новом окне</a>'
-                    st.markdown(html_link, unsafe_allow_html=True)
-                except Exception as ex:
-                    st.error(f"Ошибка формирования печати: {ex}")
+            try:
+                print_items = run_query("SELECT item_name, quantity FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
+                rows_html = ""
+                if not print_items.empty:
+                    for idx, r in print_items.iterrows():
+                        rows_html += f"<tr><td style='border: 1px solid #ddd; padding: 8px;'>{idx+1}</td><td style='border: 1px solid #ddd; padding: 8px;'>{r['item_name']}</td><td style='border: 1px solid #ddd; padding: 8px; text-align: center;'>{r['quantity']}</td></tr>"
+                
+                html_content = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="utf-8">
+                    <title>Object Specification - {selected_obj_row['object_name']}</title>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; margin: 30px; color: #333; }}
+                        h2 {{ border-bottom: 2px solid #333; padding-bottom: 5px; }}
+                        table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+                        th {{ background-color: #f4f4f4; border: 1px solid #ddd; padding: 10px; text-align: left; }}
+                        td {{ border: 1px solid #ddd; padding: 8px; }}
+                    </style>
+                </head>
+                <body>
+                    <h2>Спецификация заказа</h2>
+                    <p><strong>Заказчик:</strong> {current_client_name}</p>
+                    <p><strong>Объект:</strong> {selected_obj_row['object_name']}</p>
+                    <p><strong>Адрес:</strong> {selected_obj_row['address']}</p>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>№</th>
+                                <th>Наименование изделия</th>
+                                <th style="text-align: center;">Количество</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows_html}
+                        </tbody>
+                    </table>
+                    <script>window.print();</script>
+                </body>
+                </html>
+                """
+                
+                safe_obj_name = str(selected_obj_row['object_name']).replace(" ", "_")
+                st.download_button(
+                    label="📥 Скачать спецификацию в HTML",
+                    data=html_content,
+                    file_name=f"specification_{safe_obj_name}.html",
+                    mime="text/html",
+                    key=f"download_html_{current_obj_id}"
+                )
+            except Exception as ex:
+                st.error(f"Ошибка подготовки файла: {ex}")
         else:
             st.warning("Please create an object first.")
 
