@@ -114,7 +114,7 @@ if st.sidebar.button('Выйти'):
     st.session_state['authentication_status'] = None
     st.rerun()
 
-# --- ОСНОВНОЙ КОД ПРИЛОЖЕНИЯ (Заголовок полностью удален) ---
+# --- ОСНОВНОЙ КОД ПРИЛОЖЕНИЯ ---
 
 # TOP HORIZONTAL MENU
 menu_options = [
@@ -134,8 +134,8 @@ st.markdown("---")
 
 # 1. CLIENTS
 if menu == "Clients":
-    st.header("Clients Management")
-    st.subheader("Clients Database (Editable)")
+    st.markdown("### Clients Management")
+    st.markdown("#### Clients Database (Editable)")
     try:
         df_clients = run_query("SELECT * FROM reklet.clients ORDER BY id", fetch=True)
         if not df_clients.empty:
@@ -153,7 +153,7 @@ if menu == "Clients":
         st.info("Error loading clients: " + str(e))
         
     st.markdown("---")
-    st.subheader("Add New Client")
+    st.markdown("#### Add New Client")
     with st.form("form_add_client"):
         c_name = st.text_input("Company Name / Client")
         c_contact = st.text_area("Contact Info (Phone, Email, Address)")
@@ -173,7 +173,7 @@ if menu == "Clients":
 
 # 2. OBJECTS
 elif menu == "Objects":
-    st.header("Objects Management")
+    st.markdown("### Objects Management")
     
     obj_sub_tab = st.radio("Objects Sub-menu", ["Objects List & Create", "Object Content & Printing", "Material Requirements Calculation"], horizontal=True)
     st.markdown("---")
@@ -185,7 +185,7 @@ elif menu == "Objects":
         client_dict = {}
 
     if obj_sub_tab == "Objects List & Create":
-        st.subheader("Objects Database (Editable)")
+        st.markdown("#### Objects Database (Editable)")
         try:
             df_objects = run_query("SELECT * FROM reklet.objects ORDER BY id", fetch=True)
             if not df_objects.empty:
@@ -215,7 +215,7 @@ elif menu == "Objects":
             st.info("Error loading objects: " + str(e))
 
         st.markdown("---")
-        st.subheader("Create New Object")
+        st.markdown("#### Create New Object")
         
         if not client_dict:
             st.warning("Please add at least one client first in the 'Clients' tab.")
@@ -237,7 +237,7 @@ elif menu == "Objects":
             
             obj_notes = st.text_area("Notes")
             
-            st.markdown("#### Project Schedule & Dates")
+            st.markdown("##### Project Schedule & Dates")
             d_col1, d_col2 = st.columns(2)
             with d_col1:
                 obj_contract_date = st.date_input("Contract Signing Date", value=None)
@@ -268,7 +268,7 @@ elif menu == "Objects":
                     st.warning("Please fill in the object name and select a client.")
 
     elif obj_sub_tab == "Object Content & Printing":
-        st.subheader("Object Content & Printing Document")
+        st.markdown("#### Object Content & Printing Document")
         
         try:
             objects_full_df = run_query("""
@@ -290,7 +290,7 @@ elif menu == "Objects":
             current_client_name = selected_obj_row['client_name']
             
             st.markdown("---")
-            st.markdown(f"### Items list for object: **{selected_obj_row['object_name']}**")
+            st.markdown(f"##### Items list for object: **{selected_obj_row['object_name']}**")
             
             try:
                 df_obj_items = run_query("SELECT id, item_name, quantity, qty_new, qty_production, qty_ready, qty_shipped, qty_arrived, qty_installing, qty_installed, template_id FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
@@ -312,25 +312,14 @@ elif menu == "Objects":
                                       (row['item_name'], total_q, int(row['qty_new']), int(row['qty_production']), int(row['qty_ready']), int(row['qty_shipped']), int(row['qty_arrived']), int(row['qty_installing']), int(row['qty_installed']), real_id))
                         st.success("Item changes successfully saved!")
                         st.rerun()
-                        
-                    col_del1, col_del2 = st.columns([2, 1])
-                    with col_del1:
-                        item_to_del = st.selectbox("Delete Item", df_display['No.'].astype(str) + " — " + df_obj_items['item_name'], key=f"del_item_sel_{current_obj_id}")
-                    with col_del2:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("Delete Selected Item", key=f"btn_del_item_{current_obj_id}"):
-                            selected_index = int(item_to_del.split(" — ")[0]) - 1
-                            item_id_to_del = int(df_obj_items.iloc[selected_index]['id'])
-                            run_query("DELETE FROM reklet.object_items WHERE id = %s", (item_id_to_del,))
-                            st.success("Item successfully deleted!")
-                            st.rerun()
                 else:
                     st.info("No items added to this object yet.")
             except Exception as e:
                 st.info("Error loading items: " + str(e))
 
+            # 1. Сначала блок ДОБАВЛЕНИЯ изделий
             st.markdown("---")
-            st.markdown("### Add Item from Templates")
+            st.markdown("##### Add Item from Templates")
             
             filter_by_client = st.checkbox("Filter by object client", value=True, key=f"filter_client_{current_obj_id}")
             
@@ -373,16 +362,88 @@ elif menu == "Objects":
                             st.error(f"Error: {e}")
             else:
                 st.warning("No templates available for the selected filter. Check Product Templates section.")
+
+            # 2. Затем блок УДАЛЕНИЯ (если ошиблись)
+            try:
+                df_obj_items_del = run_query("SELECT id, item_name FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
+                if not df_obj_items_del.empty:
+                    st.markdown("---")
+                    st.markdown("##### Delete Mistaken Item")
+                    col_del1, col_del2 = st.columns([2, 1])
+                    with col_del1:
+                        del_list = [f"{i+1} — {row['item_name']}" for i, (_, row) in enumerate(df_obj_items_del.iterrows())]
+                        item_to_del = st.selectbox("Select item to delete", del_list, key=f"del_item_sel_{current_obj_id}")
+                    with col_del2:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        if st.button("Delete Selected Item", key=f"btn_del_item_{current_obj_id}"):
+                            selected_index = int(item_to_del.split(" — ")[0]) - 1
+                            item_id_to_del = int(df_obj_items_del.iloc[selected_index]['id'])
+                            run_query("DELETE FROM reklet.object_items WHERE id = %s", (item_id_to_del,))
+                            st.success("Item successfully deleted!")
+                            st.rerun()
+            except:
+                pass
+
+            # 3. Кнопка печати HTML в новом окне
+            st.markdown("---")
+            if st.button("🖨️ Печать в новом окне (HTML)", key=f"print_html_{current_obj_id}"):
+                try:
+                    print_items = run_query("SELECT item_name, quantity FROM reklet.object_items WHERE object_id = %s ORDER BY id", (int(current_obj_id),), fetch=True)
+                    rows_html = ""
+                    if not print_items.empty:
+                        for idx, r in print_items.iterrows():
+                            rows_html += f"<tr><td style='border: 1px solid #ddd; padding: 8px;'>{idx+1}</td><td style='border: 1px solid #ddd; padding: 8px;'>{r['item_name']}</td><td style='border: 1px solid #ddd; padding: 8px; text-align: center;'>{r['quantity']}</td></tr>"
+                    
+                    html_content = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="utf-8">
+                        <title>Object Specification - {selected_obj_row['object_name']}</title>
+                        <style>
+                            body {{ font-family: Arial, sans-serif; margin: 30px; color: #333; }}
+                            h2 {{ border-bottom: 2px solid #333; padding-bottom: 5px; }}
+                            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+                            th {{ background-color: #f4f4f4; border: 1px solid #ddd; padding: 10px; text-align: left; }}
+                        </style>
+                    </head>
+                    <body>
+                        <h2>Спецификация заказа</h2>
+                        <p><strong>Заказчик:</strong> {current_client_name}</p>
+                        <p><strong>Объект:</strong> {selected_obj_row['object_name']}</p>
+                        <p><strong>Адрес:</strong> {selected_obj_row['address']}</p>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>№</th>
+                                    <th>Наименование изделия</th>
+                                    <th style="text-align: center;">Количество</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {rows_html}
+                            </tbody>
+                        </table>
+                        <script>window.print();</script>
+                    </body>
+                    </html>
+                    """
+                    import base64
+                    b64 = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
+                    html_link = f'<a href="data:text/html;base64,{b64}" target="_blank" style="padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">Нажмите сюда для открытия печатной формы в новом окне</a>'
+                    st.markdown(html_link, unsafe_allow_html=True)
+                except Exception as ex:
+                    st.error(f"Ошибка формирования печати: {ex}")
         else:
             st.warning("Please create an object first.")
 
     elif obj_sub_tab == "Material Requirements Calculation":
-        st.subheader("Material Requirements Calculation")
+        st.markdown("#### Material Requirements Calculation")
         st.info("Here you can calculate required materials for objects based on items.")
 
 # 3. PRODUCT TEMPLATES
 elif menu == "Product Templates":
-    st.header("Product Templates Management")
+    st.markdown("### Product Templates Management")
     try:
         df_templates = run_query("SELECT * FROM reklet.product_templates ORDER BY id", fetch=True)
         if not df_templates.empty:
@@ -399,7 +460,7 @@ elif menu == "Product Templates":
 
 # 4. MATERIALS WAREHOUSE
 elif menu == "Materials Warehouse":
-    st.header("Materials Warehouse Management")
+    st.markdown("### Materials Warehouse Management")
     try:
         df_materials = run_query("SELECT * FROM reklet.materials ORDER BY id", fetch=True)
         if not df_materials.empty:
@@ -411,7 +472,7 @@ elif menu == "Materials Warehouse":
 
 # 5. PRODUCTION
 elif menu == "Production":
-    st.header("Production Control")
+    st.markdown("### Production Control")
     try:
         df_prod = run_query("SELECT id, item_name, quantity, qty_new, qty_production, qty_ready, status FROM reklet.object_items WHERE qty_production > 0 OR qty_new > 0 ORDER BY id", fetch=True)
         if not df_prod.empty:
@@ -423,7 +484,7 @@ elif menu == "Production":
 
 # 6. TRANSPORT
 elif menu == "Transport":
-    st.header("Transport & Logistics")
+    st.markdown("### Transport & Logistics")
     try:
         df_transport = run_query("SELECT id, object_name, address, transport_distance_km, delivery_cost FROM reklet.objects ORDER BY id", fetch=True)
         if not df_transport.empty:
@@ -435,7 +496,7 @@ elif menu == "Transport":
 
 # 7. INSTALLATION
 elif menu == "Installation":
-    st.header("Installation Management")
+    st.markdown("### Installation Management")
     try:
         df_install = run_query("SELECT id, object_name, address, installation_date, installation_end_date FROM reklet.objects ORDER BY id", fetch=True)
         if not df_install.empty:
@@ -447,10 +508,10 @@ elif menu == "Installation":
 
 # 8. PAYROLL CALCULATION
 elif menu == "Payroll Calculation":
-    st.header("Payroll Calculation")
+    st.markdown("### Payroll Calculation")
     st.write("Calculate worker salaries based on completed production and installation stages.")
 
 # 9. REPORTS
 elif menu == "Reports":
-    st.header("Reports & Analytics")
+    st.markdown("### Reports & Analytics")
     st.write("Summary reports for production, materials usage, and object statuses.")
