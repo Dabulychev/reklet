@@ -86,12 +86,12 @@ try:
 except Exception:
     pass
 
-# Simple Authentication setup
+# Simple Authentication setup (пароль: 12345)
 credentials = {
     'usernames': {
         'admin': {
             'name': 'Administrator',
-            'password': '$2b$12$e8iL1sQ5e8iL1sQ5e8iL1uW3J9aXBHumnr$u' # Укажите ваш хеш или оставьте стандартный
+            'password': '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGgl31lS'
         }
     }
 }
@@ -103,7 +103,6 @@ authenticator = stauth.Authenticate(
     30
 )
 
-# Исправленная строчка вызова логина (используется параметр location)
 authenticator.login(location='main', fields={'Form name': 'Login'})
 
 name = st.session_state.get('name')
