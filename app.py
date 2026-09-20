@@ -86,7 +86,7 @@ try:
 except Exception:
     pass
 
-# --- SIMPLE AUTHENTICATION (Без сложных хэшей) ---
+# --- SIMPLE AUTHENTICATION ---
 if 'authentication_status' not in st.session_state:
     st.session_state['authentication_status'] = None
 
@@ -98,7 +98,6 @@ if not st.session_state['authentication_status']:
         submit_login = st.form_submit_button("Login")
         
         if submit_login:
-            # Укажите здесь нужные логин и пароль
             if username_input == "admin" and password_input == "12345":
                 st.session_state['authentication_status'] = True
                 st.session_state['username'] = "admin"
@@ -141,16 +140,19 @@ if menu == "Clients":
     st.subheader("Clients Database (Editable)")
     try:
         df_clients = run_query("SELECT * FROM reklet.clients ORDER BY id", fetch=True)
-        edited_clients = st.data_editor(df_clients, key="clients_editor", use_container_width=True, num_rows="fixed")
-        
-        if st.button("Save Changes to Database", key="save_clients"):
-            for _, row in edited_clients.iterrows():
-                run_query("UPDATE reklet.clients SET name = %s, contact_info = %s WHERE id = %s",
-                          (row['name'], row['contact_info'], int(row['id'])))
-            st.success("Changes successfully saved!")
-            st.rerun()
+        if not df_clients.empty:
+            edited_clients = st.data_editor(df_clients, key="clients_editor", use_container_width=True, num_rows="fixed")
+            
+            if st.button("Save Changes to Database", key="save_clients"):
+                for _, row in edited_clients.iterrows():
+                    run_query("UPDATE reklet.clients SET name = %s, contact_info = %s WHERE id = %s",
+                              (row['name'], row['contact_info'], int(row['id'])))
+                st.success("Changes successfully saved!")
+                st.rerun()
+        else:
+            st.info("No clients found in the database.")
     except Exception as e:
-        st.info("No client data found or error: " + str(e))
+        st.info("Error loading clients: " + str(e))
         
     st.markdown("---")
     st.subheader("Add New Client")
@@ -188,28 +190,31 @@ elif menu == "Objects":
         st.subheader("Objects Database (Editable)")
         try:
             df_objects = run_query("SELECT * FROM reklet.objects ORDER BY id", fetch=True)
-            edited_objects = st.data_editor(df_objects, key="objects_editor", use_container_width=True)
-            
-            if st.button("Save Changes to Database", key="save_objects"):
-                for _, row in edited_objects.iterrows():
-                    run_query("""UPDATE reklet.objects SET 
-                                object_name = %s, address = %s, phone = %s, contact_person = %s, 
-                                notes = %s, transport_distance_km = %s, delivery_cost = %s,
-                                contract_date = %s, production_start_date = %s, production_end_date = %s,
-                                installation_date = %s, installation_end_date = %s
-                                WHERE id = %s""",
-                              (row['object_name'], row['address'], row['phone'], row['contact_person'],
-                               row['notes'], row['transport_distance_km'], row['delivery_cost'],
-                               row['contract_date'] if pd.notna(row['contract_date']) else None,
-                               row['production_start_date'] if pd.notna(row['production_start_date']) else None,
-                               row['production_end_date'] if pd.notna(row['production_end_date']) else None,
-                               row['installation_date'] if pd.notna(row['installation_date']) else None,
-                               row['installation_end_date'] if pd.notna(row['installation_end_date']) else None,
-                               int(row['id'])))
-            st.success("Changes successfully saved!")
-            st.rerun()
+            if not df_objects.empty:
+                edited_objects = st.data_editor(df_objects, key="objects_editor", use_container_width=True)
+                
+                if st.button("Save Changes to Database", key="save_objects"):
+                    for _, row in edited_objects.iterrows():
+                        run_query("""UPDATE reklet.objects SET 
+                                    object_name = %s, address = %s, phone = %s, contact_person = %s, 
+                                    notes = %s, transport_distance_km = %s, delivery_cost = %s,
+                                    contract_date = %s, production_start_date = %s, production_end_date = %s,
+                                    installation_date = %s, installation_end_date = %s
+                                    WHERE id = %s""",
+                                  (row['object_name'], row['address'], row['phone'], row['contact_person'],
+                                   row['notes'], row['transport_distance_km'], row['delivery_cost'],
+                                   row['contract_date'] if pd.notna(row['contract_date']) else None,
+                                   row['production_start_date'] if pd.notna(row['production_start_date']) else None,
+                                   row['production_end_date'] if pd.notna(row['production_end_date']) else None,
+                                   row['installation_date'] if pd.notna(row['installation_date']) else None,
+                                   row['installation_end_date'] if pd.notna(row['installation_end_date']) else None,
+                                   int(row['id'])))
+                    st.success("Changes successfully saved!")
+                    st.rerun()
+            else:
+                st.info("No objects found.")
         except Exception as e:
-            st.info("No objects found or error: " + str(e))
+            st.info("Error loading objects: " + str(e))
 
         st.markdown("---")
         st.subheader("Create New Object")
@@ -307,7 +312,7 @@ elif menu == "Objects":
                                         qty_new = %s, qty_production = %s, qty_ready = %s, qty_shipped = %s, qty_arrived = %s, qty_installing = %s, qty_installed = %s 
                                         WHERE id = %s""",
                                       (row['item_name'], total_q, int(row['qty_new']), int(row['qty_production']), int(row['qty_ready']), int(row['qty_shipped']), int(row['qty_arrived']), int(row['qty_installing']), int(row['qty_installed']), real_id))
-                        st.success("Changes successfully saved!")
+                        st.success("Item changes successfully saved!")
                         st.rerun()
                         
                     col_del1, col_del2 = st.columns([2, 1])
@@ -370,6 +375,84 @@ elif menu == "Objects":
                             st.error(f"Error: {e}")
             else:
                 st.warning("No templates available for the selected filter. Check Product Templates section.")
+        else:
+            st.warning("Please create an object first.")
 
-    else:
-        st.info("Please add objects in the Objects Database first.")
+    elif obj_sub_tab == "Material Requirements Calculation":
+        st.subheader("Material Requirements Calculation")
+        st.info("Here you can calculate required materials for objects based on items.")
+
+# 3. PRODUCT TEMPLATES
+elif menu == "Product Templates":
+    st.header("Product Templates Management")
+    try:
+        df_templates = run_query("SELECT * FROM reklet.product_templates ORDER BY id", fetch=True)
+        if not df_templates.empty:
+            edited_templates = st.data_editor(df_templates, key="templates_editor", use_container_width=True)
+            if st.button("Save Changes in Templates", key="save_templates"):
+                for _, row in edited_templates.iterrows():
+                    run_query("UPDATE reklet.product_templates SET name = %s WHERE id = %s", (row['name'], int(row['id'])))
+                st.success("Templates updated successfully!")
+                st.rerun()
+        else:
+            st.info("No product templates found.")
+    except Exception as e:
+        st.info("Product templates table is empty or missing: " + str(e))
+
+# 4. MATERIALS WAREHOUSE
+elif menu == "Materials Warehouse":
+    st.header("Materials Warehouse Management")
+    try:
+        df_materials = run_query("SELECT * FROM reklet.materials ORDER BY id", fetch=True)
+        if not df_materials.empty:
+            st.dataframe(df_materials, use_container_width=True)
+        else:
+            st.info("No materials found in warehouse.")
+    except Exception as e:
+        st.info("Error loading warehouse data: " + str(e))
+
+# 5. PRODUCTION
+elif menu == "Production":
+    st.header("Production Control")
+    try:
+        df_prod = run_query("SELECT id, item_name, quantity, qty_new, qty_production, qty_ready, status FROM reklet.object_items WHERE qty_production > 0 OR qty_new > 0 ORDER BY id", fetch=True)
+        if not df_prod.empty:
+            st.dataframe(df_prod, use_container_width=True)
+        else:
+            st.info("No active production items found.")
+    except Exception as e:
+        st.info("Error loading production data: " + str(e))
+
+# 6. TRANSPORT
+elif menu == "Transport":
+    st.header("Transport & Logistics")
+    try:
+        df_transport = run_query("SELECT id, object_name, address, transport_distance_km, delivery_cost FROM reklet.objects ORDER BY id", fetch=True)
+        if not df_transport.empty:
+            st.dataframe(df_transport, use_container_width=True)
+        else:
+            st.info("No transport data found.")
+    except Exception as e:
+        st.info("Error loading transport data: " + str(e))
+
+# 7. INSTALLATION
+elif menu == "Installation":
+    st.header("Installation Management")
+    try:
+        df_install = run_query("SELECT id, object_name, address, installation_date, installation_end_date FROM reklet.objects ORDER BY id", fetch=True)
+        if not df_install.empty:
+            st.dataframe(df_install, use_container_width=True)
+        else:
+            st.info("No installation data found.")
+    except Exception as e:
+        st.info("Error loading installation data: " + str(e))
+
+# 8. PAYROLL CALCULATION
+elif menu == "Payroll Calculation":
+    st.header("Payroll Calculation")
+    st.write("Calculate worker salaries based on completed production and installation stages.")
+
+# 9. REPORTS
+elif menu == "Reports":
+    st.header("Reports & Analytics")
+    st.write("Summary reports for production, materials usage, and object statuses.")
