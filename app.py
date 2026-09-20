@@ -344,7 +344,12 @@ elif menu == "Objects":
                 with st.form("form_add_item_to_obj"):
                     selected_template_label = st.selectbox("Product Template", list(templates_dict.keys()), key="target_template_add")
                     template_id = templates_dict[selected_template_label]
-                    item_custom_name = selected_template_label.split(" — ", 1)[1]
+                    
+                    # Безопасно извлекаем имя изделия
+                    if " — " in selected_template_label:
+                        item_custom_name = selected_template_label.split(" — ", 1)[1]
+                    else:
+                        item_custom_name = selected_template_label
                     
                     item_qty = st.number_input("Total Quantity", min_value=1, value=1, key="input_item_qty")
                     
