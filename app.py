@@ -344,59 +344,76 @@ except Exception as e:
 # ============================================================
 
 if "authentication_status" not in st.session_state:
-
     st.session_state["authentication_status"] = None
+
+if "demo_mode" not in st.session_state:
+    st.session_state["demo_mode"] = False
 
 
 if not st.session_state["authentication_status"]:
 
-    st.title(
-        "Reklet — Production Management"
-    )
-
+    st.title("Reklet — Production Management")
     st.subheader("Login")
 
     with st.form("login_form"):
 
-        username_input = st.text_input(
-            "Username"
-        )
+        username_input = st.text_input("Username")
 
         password_input = st.text_input(
             "Password",
             type="password"
         )
 
-        submit_login = st.form_submit_button(
-            "Login"
-        )
+        submit_login = st.form_submit_button("Login")
 
         if submit_login:
+
+            # ==================================================
+            # ADMIN LOGIN
+            # ==================================================
 
             if (
                 username_input == "admin"
                 and password_input == "qwert12345"
             ):
 
-                st.session_state[
-                    "authentication_status"
-                ] = True
+                st.session_state["authentication_status"] = True
+                st.session_state["username"] = "admin"
+                st.session_state["name"] = "Administrator"
 
-                st.session_state[
-                    "username"
-                ] = "admin"
-
-                st.session_state[
-                    "name"
-                ] = "Administrator"
+                # Admin works with real database changes
+                st.session_state["demo_mode"] = False
 
                 st.rerun()
 
+
+            # ==================================================
+            # DEMO LOGIN
+            # ==================================================
+
+            elif (
+                username_input == "demo"
+                and password_input == "demo"
+            ):
+
+                st.session_state["authentication_status"] = True
+                st.session_state["username"] = "demo"
+                st.session_state["name"] = "Demo User"
+
+                # Demo flag.
+                # Transaction logic will be added in Step 4.
+                st.session_state["demo_mode"] = True
+
+                st.rerun()
+
+
+            # ==================================================
+            # INVALID LOGIN
+            # ==================================================
+
             else:
 
-                st.session_state[
-                    "authentication_status"
-                ] = False
+                st.session_state["authentication_status"] = False
 
                 st.error(
                     "Invalid username or password"
