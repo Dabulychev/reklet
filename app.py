@@ -114,9 +114,7 @@ if st.sidebar.button('Выйти'):
     st.session_state['authentication_status'] = None
     st.rerun()
 
-# --- ОСНОВНОЙ КОД ПРИЛОЖЕНИЯ ---
-st.title("Production & Logistics Management (Reklet)")
-st.markdown("---")
+# --- ОСНОВНОЙ КОД ПРИЛОЖЕНИЯ (Заголовок полностью удален) ---
 
 # TOP HORIZONTAL MENU
 menu_options = [
