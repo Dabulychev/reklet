@@ -29,6 +29,7 @@ st.set_page_config(
 # DB_NAME = "postgres"
 # DB_USER = "postgres.lnkaohubtchmsiniepoc"
 # DB_PASSWORD = "YOUR_DATABASE_PASSWORD"
+# ADMIN_PASSWORD = "YOUR_ADMIN_PASSWORD"
 
 try:
     DB_HOST = st.secrets["DB_HOST"]
@@ -36,6 +37,7 @@ try:
     DB_NAME = st.secrets["DB_NAME"]
     DB_USER = st.secrets["DB_USER"]
     DB_PASSWORD = st.secrets["DB_PASSWORD"]
+    ADMIN_PASSWORD = st.secrets["ADMIN_PASSWORD"]
 
 except Exception as e:
 
@@ -48,6 +50,7 @@ DB_PORT = "5432"
 DB_NAME = "postgres"
 DB_USER = "postgres.lnkaohubtchmsiniepoc"
 DB_PASSWORD = "YOUR_DATABASE_PASSWORD"
+ADMIN_PASSWORD = "YOUR_ADMIN_PASSWORD"
         """
     )
 
@@ -436,7 +439,7 @@ if not st.session_state["authentication_status"]:
 
             if (
                 username_input == "admin"
-                and password_input == "qwert12345"
+                and password_input == ADMIN_PASSWORD
             ):
 
                 st.session_state["authentication_status"] = True
@@ -1889,29 +1892,64 @@ elif menu == "Objects":
 
 elif menu == "Product Templates":
 
-    st.header(
-        "Product Templates"
+    st.header("Product Templates")
+
+    sub = st.radio(
+        "Products",
+        [
+            "Products List",
+            "Product Material Specification"
+        ],
+        horizontal=True
     )
 
-    templates = get_templates()
+    st.markdown("---")
 
 
     # ========================================================
-    # CREATE
+    # PRODUCTS LIST
     # ========================================================
 
-    with st.expander(
-        "Create Product Template",
-        expanded=False
-    ):
+    if sub == "Products List":
 
-        with st.form(
-            "create_template"
-        ):
+        templates = get_templates()
 
-            name = st.text_input(
-                "Product Name"
+        st.subheader("Products")
+
+        if templates.empty:
+            st.info("No products yet.")
+        else:
+            display = templates[
+                [
+                    "id",
+                    "name",
+                    "type",
+                    "client_name",
+                    "category"
+                ]
+            ].copy()
+
+            display.columns = [
+                "ID",
+                "Product",
+                "Type",
+                "Client",
+                "Category"
+            ]
+
+            st.dataframe(
+                display,
+                use_container_width=True,
+                hide_index=True
             )
+
+        st.markdown("---")
+
+        st.subheader("Create Product")
+
+        with st.form("create_template"):
+
+            name = st.text_input("Product Name")
 
             type_value = st.selectbox(
                 "Type",
@@ -1921,409 +1959,410 @@ elif menu == "Product Templates":
                 ]
             )
 
-            client_name = st.text_input(
-                "Client"
-            )
+            client_name = st.text_input("Client")
 
-            category = st.text_input(
-                "Category"
-            )
+            category = st.text_input("Category")
 
-            submit = st.form_submit_button(
-                "Create Product"
-            )
+            submit = st.form_submit_button("Create Product")
 
             if submit:
 
                 if not name.strip():
-
-                    st.warning(
-                        "Product name is required."
-                    )
+                    st.warning("Product name is required.")
 
                 else:
-
                     run_query(
                         """
-                        INSERT INTO
-                        reklet.product_templates
+                        INSERT INTO reklet.product_templates
                         (
                             name,
                             type,
                             client_name,
                             category
                         )
-
                         VALUES (%s,%s,%s,%s)
                         """,
                         (
-                            name,
+                            name.strip(),
                             type_value,
                             client_name or None,
                             category or None
                         )
                     )
 
-                    st.success(
-                        "Product created."
-                    )
-
+                    st.success("Product created.")
                     st.rerun()
 
+        # ----------------------------------------------------
+        # EDIT PRODUCT
+        # ----------------------------------------------------
 
-    # ========================================================
-    # EDIT
-    # ========================================================
+        if not templates.empty:
 
-    if not templates.empty:
+            st.markdown("---")
+            st.subheader("Edit Product")
 
-        st.subheader(
-            "Products"
-        )
+            product_map = {
+                f"{row['id']} — {row['name']}": int(row["id"])
+                for _, row in templates.iterrows()
+            }
 
-        edited = st.data_editor(
-            templates,
-            key="templates_editor",
-            use_container_width=True,
-            num_rows="fixed"
-        )
+            edit_label = st.selectbox(
+                "Product",
+                list(product_map.keys()),
+                key="edit_product"
+            )
 
-        if st.button(
-            "Save Product Changes",
-            key="save_templates"
-        ):
+            edit_id = product_map[edit_label]
+            edit_row = templates[templates["id"] == edit_id].iloc[0]
 
-            for _, row in edited.iterrows():
+            with st.form("edit_product_form"):
 
-                run_query(
-                    """
-                    UPDATE
-                        reklet.product_templates
+                edit_name = st.text_input(
+                    "Product Name",
+                    value=str(edit_row["name"] or "")
+                )
 
-                    SET
-                        name = %s,
-                        type = %s,
-                        client_name = %s,
-                        category = %s
-
-                    WHERE id = %s
-                    """,
-                    (
-                        row["name"],
-                        row["type"],
-                        row["client_name"],
-                        row["category"],
-                        safe_int(row["id"])
+                edit_type = st.selectbox(
+                    "Type",
+                    ["recurrent", "custom"],
+                    index=(
+                        0
+                        if edit_row["type"] == "recurrent"
+                        else 1
                     )
                 )
 
-            st.success(
-                "Saved."
-            )
+                edit_client = st.text_input(
+                    "Client",
+                    value=str(edit_row["client_name"] or "")
+                )
 
-            st.rerun()
+                edit_category = st.text_input(
+                    "Category",
+                    value=str(edit_row["category"] or "")
+                )
 
+                save_product = st.form_submit_button("Save Product Changes")
 
-    st.markdown("---")
+                if save_product:
 
-    st.subheader(
-        "Product Material Specification"
-    )
+                    if not edit_name.strip():
+                        st.warning("Product name is required.")
+                    else:
+                        run_query(
+                            """
+                            UPDATE reklet.product_templates
+                            SET
+                                name = %s,
+                                type = %s,
+                                client_name = %s,
+                                category = %s
+                            WHERE id = %s
+                            """,
+                            (
+                                edit_name.strip(),
+                                edit_type,
+                                edit_client or None,
+                                edit_category or None,
+                                edit_id
+                            )
+                        )
 
-    if templates.empty:
+                        st.success("Product updated.")
+                        st.rerun()
 
-        st.info(
-            "Create a product first."
-        )
+            # ------------------------------------------------
+            # DELETE PRODUCT — LAST
+            # ------------------------------------------------
 
-    else:
+            st.markdown("---")
+            st.subheader("Delete Product")
 
-        template_map = {
-
-            f"{row['id']} — "
-            f"{row['name']} — "
-            f"{row['client_name'] or 'General'}":
-                int(row["id"])
-
-            for _, row in templates.iterrows()
-        }
-
-        selected = st.selectbox(
-            "Product",
-            list(template_map.keys()),
-            key="template_spec"
-        )
-
-        template_id = template_map[
-            selected
-        ]
-
-        specification = run_query(
-            """
-            SELECT
-
-                ptm.id,
-
-                ptm.material_id,
-
-                m.name
-                    AS material_name,
-
-                u.name
-                    AS unit_name,
-
-                ptm.quantity_per_unit,
-
-                ptm.waste_coefficient
-
-            FROM
-                reklet.product_template_materials ptm
-
-            JOIN reklet.materials m
-
-                ON m.id = ptm.material_id
-
-            LEFT JOIN reklet.units u
-
-                ON u.id = m.unit_id
-
-            WHERE
-                ptm.product_template_id = %s
-
-            ORDER BY
-                m.name
-            """,
-            (template_id,),
-            fetch=True
-        )
-
-        if not specification.empty:
-
-            display = specification[
-                [
-                    "id",
-                    "material_name",
-                    "unit_name",
-                    "quantity_per_unit",
-                    "waste_coefficient"
-                ]
-            ].copy()
-
-            display.columns = [
-
-                "ID",
-                "Material",
-                "Unit",
-                "Qty / Product",
-                "Waste Coef."
-
-            ]
-
-            st.dataframe(
-                display,
-                use_container_width=True,
-                hide_index=True
-            )
-
-            st.markdown(
-                "### Delete Specification Row"
-            )
-
-            delete_map = {
-
-                f"{row['id']} — "
-                f"{row['material_name']}":
-                    int(row["id"])
-
-                for _, row in specification.iterrows()
-            }
-
-            delete_label = st.selectbox(
-                "Specification Row",
-                list(delete_map.keys()),
-                key="delete_spec_row"
+            delete_product = st.selectbox(
+                "Product",
+                list(product_map.keys()),
+                key="delete_product"
             )
 
             if st.button(
-                "Delete Specification Row"
+                "Delete Product",
+                key="delete_product_button"
             ):
 
-                run_query(
-                    """
-                    DELETE FROM
-                        reklet.product_template_materials
-
-                    WHERE id = %s
-                    """,
-                    (
-                        delete_map[
-                            delete_label
-                        ],
+                try:
+                    run_query(
+                        """
+                        DELETE FROM reklet.product_templates
+                        WHERE id = %s
+                        """,
+                        (product_map[delete_product],)
                     )
-                )
 
-                st.success(
-                    "Deleted."
-                )
+                    st.success("Product deleted.")
+                    st.rerun()
 
-                st.rerun()
-
-        else:
-
-            st.info(
-                "No materials in this product specification."
-            )
+                except Exception as e:
+                    st.error(
+                        "Product cannot be deleted. "
+                        "It may already be used in an object."
+                    )
+                    st.code(str(e))
 
 
-        st.markdown("---")
+    # ========================================================
+    # PRODUCT MATERIAL SPECIFICATION
+    # ========================================================
 
-        st.subheader(
-            "Add Material"
-        )
+    else:
 
-        materials = get_materials()
+        templates = get_templates()
 
-        if materials.empty:
-
-            st.warning(
-                "Create materials in Materials Warehouse first."
-            )
+        if templates.empty:
+            st.info("Create a product first.")
 
         else:
 
-            material_map = {
-
-                f"{row['name']} — "
-                f"{row['unit_name'] or ''}":
-                    int(row["id"])
-
-                for _, row in materials.iterrows()
+            template_map = {
+                f"{row['id']} — {row['name']} — "
+                f"{row['client_name'] or 'General'}": int(row["id"])
+                for _, row in templates.iterrows()
             }
 
-            with st.form(
-                f"add_material_to_template_{template_id}"
-            ):
+            selected = st.selectbox(
+                "Product",
+                list(template_map.keys()),
+                key="template_spec"
+            )
 
-                material_label = st.selectbox(
-                    "Material",
-                    list(material_map.keys())
-                )
+            template_id = template_map[selected]
 
-                quantity_per_unit = st.number_input(
-                    "Quantity per Product",
-                    min_value=0.0001,
-                    value=1.0,
-                    format="%.4f"
-                )
+            # =================================================
+            # 1. LIST
+            # =================================================
 
-                waste = st.number_input(
-                    "Waste Coefficient",
-                    min_value=0.0,
-                    value=1.20,
-                    format="%.2f"
-                )
+            st.subheader("Material List")
 
-                submit = st.form_submit_button(
-                    "Add Material"
-                )
+            specification = run_query(
+                """
+                SELECT
+                    ptm.id,
+                    ptm.material_id,
+                    m.name AS material_name,
+                    u.name AS unit_name,
+                    ptm.quantity_per_unit,
+                    ptm.waste_coefficient
+                FROM reklet.product_template_materials ptm
+                JOIN reklet.materials m
+                    ON m.id = ptm.material_id
+                LEFT JOIN reklet.units u
+                    ON u.id = m.unit_id
+                WHERE ptm.product_template_id = %s
+                ORDER BY m.name
+                """,
+                (template_id,),
+                fetch=True
+            )
 
-                if submit:
-
-                    material_id = material_map[
-                        material_label
+            if specification.empty:
+                st.info("No materials in this product specification.")
+            else:
+                display = specification[
+                    [
+                        "id",
+                        "material_name",
+                        "unit_name",
+                        "quantity_per_unit",
+                        "waste_coefficient"
                     ]
+                ].copy()
+
+                display.columns = [
+                    "ID",
+                    "Material",
+                    "Unit",
+                    "Qty / Product",
+                    "Waste Coef."
+                ]
+
+                st.dataframe(
+                    display,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            # =================================================
+            # 2. ADD — MAIN TASK
+            # =================================================
+
+            st.markdown("---")
+            st.subheader("Add Material")
+
+            materials = get_materials()
+
+            if materials.empty:
+                st.warning(
+                    "Create materials in Materials Warehouse first."
+                )
+            else:
+                material_map = {
+                    f"{row['name']} — {row['unit_name'] or ''}": int(row["id"])
+                    for _, row in materials.iterrows()
+                }
+
+                with st.form(
+                    f"add_material_to_template_{template_id}"
+                ):
+
+                    material_label = st.selectbox(
+                        "Material",
+                        list(material_map.keys())
+                    )
+
+                    quantity_per_unit = st.number_input(
+                        "Quantity per Product",
+                        min_value=0.0001,
+                        value=1.0,
+                        format="%.4f"
+                    )
+
+                    waste = st.number_input(
+                        "Waste Coefficient",
+                        min_value=0.0,
+                        value=1.20,
+                        format="%.2f"
+                    )
+
+                    submit = st.form_submit_button("Add Material")
+
+                    if submit:
+
+                        material_id = material_map[material_label]
+
+                        run_query(
+                            """
+                            INSERT INTO reklet.product_template_materials
+                            (
+                                product_template_id,
+                                material_id,
+                                quantity_per_unit,
+                                waste_coefficient
+                            )
+                            VALUES (%s,%s,%s,%s)
+                            """,
+                            (
+                                template_id,
+                                material_id,
+                                quantity_per_unit,
+                                waste
+                            )
+                        )
+
+                        st.success("Material added to specification.")
+                        st.rerun()
+
+            # =================================================
+            # 3. EDIT — SECONDARY TASK
+            # =================================================
+
+            st.markdown("---")
+            st.subheader("Edit Material")
+
+            if specification.empty:
+                st.info("Add a material first.")
+            else:
+                spec_map = {
+                    f"{row['id']} — {row['material_name']}": int(row["id"])
+                    for _, row in specification.iterrows()
+                }
+
+                edit_spec_label = st.selectbox(
+                    "Material",
+                    list(spec_map.keys()),
+                    key="edit_spec_row"
+                )
+
+                edit_spec_id = spec_map[edit_spec_label]
+                edit_spec = specification[
+                    specification["id"] == edit_spec_id
+                ].iloc[0]
+
+                with st.form("edit_material_spec_form"):
+
+                    edit_quantity = st.number_input(
+                        "Quantity per Product",
+                        min_value=0.0001,
+                        value=float(edit_spec["quantity_per_unit"]),
+                        format="%.4f"
+                    )
+
+                    edit_waste = st.number_input(
+                        "Waste Coefficient",
+                        min_value=0.0,
+                        value=float(edit_spec["waste_coefficient"]),
+                        format="%.2f"
+                    )
+
+                    save_spec = st.form_submit_button(
+                        "Save Material Changes"
+                    )
+
+                    if save_spec:
+
+                        run_query(
+                            """
+                            UPDATE reklet.product_template_materials
+                            SET
+                                quantity_per_unit = %s,
+                                waste_coefficient = %s
+                            WHERE id = %s
+                            """,
+                            (
+                                edit_quantity,
+                                edit_waste,
+                                edit_spec_id
+                            )
+                        )
+
+                        st.success("Material specification updated.")
+                        st.rerun()
+
+            # =================================================
+            # 4. DELETE — LAST
+            # =================================================
+
+            st.markdown("---")
+            st.subheader("Delete Material")
+
+            if specification.empty:
+                st.info("Nothing to delete.")
+            else:
+                delete_map = {
+                    f"{row['id']} — {row['material_name']}": int(row["id"])
+                    for _, row in specification.iterrows()
+                }
+
+                delete_label = st.selectbox(
+                    "Material",
+                    list(delete_map.keys()),
+                    key="delete_spec_row"
+                )
+
+                if st.button(
+                    "Delete Material",
+                    key="delete_spec_button"
+                ):
 
                     run_query(
                         """
-                        INSERT INTO
-                        reklet.product_template_materials
-                        (
-                            product_template_id,
-                            material_id,
-                            quantity_per_unit,
-                            waste_coefficient
-                        )
-
-                        VALUES (%s,%s,%s,%s)
+                        DELETE FROM reklet.product_template_materials
+                        WHERE id = %s
                         """,
-                        (
-                            template_id,
-                            material_id,
-                            quantity_per_unit,
-                            waste
-                        )
+                        (delete_map[delete_label],)
                     )
 
-                    st.success(
-                        "Material added to specification."
-                    )
-
+                    st.success("Material deleted from specification.")
                     st.rerun()
-
-
-    # ========================================================
-    # DELETE PRODUCT
-    # ========================================================
-
-    st.markdown("---")
-
-    st.subheader(
-        "Delete Product"
-    )
-
-    if not templates.empty:
-
-        delete_product_map = {
-
-            f"{row['id']} — {row['name']}":
-                int(row["id"])
-
-            for _, row in templates.iterrows()
-        }
-
-        delete_product = st.selectbox(
-            "Product",
-            list(delete_product_map.keys()),
-            key="delete_product"
-        )
-
-        if st.button(
-            "Delete Product",
-            key="delete_product_button"
-        ):
-
-            try:
-
-                run_query(
-                    """
-                    DELETE FROM
-                        reklet.product_templates
-
-                    WHERE id = %s
-                    """,
-                    (
-                        delete_product_map[
-                            delete_product
-                        ],
-                    )
-                )
-
-                st.success(
-                    "Product deleted."
-                )
-
-                st.rerun()
-
-            except Exception as e:
-
-                st.error(
-                    "Product cannot be deleted. "
-                    "It may already be used in an object."
-                )
-
-                st.code(
-                    str(e)
-                )
 
 
 # ============================================================
