@@ -509,8 +509,8 @@ def get_objects():
 
 def get_materials():
 
-    # Core material query does not depend on optional category tables.
-    return run_query(
+    # Keep this query limited to the core columns used by the product/material picker.
+    materials = run_query(
         """
         SELECT
             m.id,
@@ -518,8 +518,7 @@ def get_materials():
             m.unit_id,
             u.name AS unit_name,
             m.cost_per_unit,
-            m.stock_quantity,
-            m.default_waste_coefficient
+            m.stock_quantity
         FROM reklet.materials m
         LEFT JOIN reklet.units u
             ON u.id = m.unit_id
@@ -527,6 +526,11 @@ def get_materials():
         """,
         fetch=True
     )
+
+    if "default_waste_coefficient" not in materials.columns:
+        materials["default_waste_coefficient"] = 1.20
+
+    return materials
 
 
 def get_materials_with_categories():
