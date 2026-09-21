@@ -1947,6 +1947,20 @@ elif menu == "Product Templates":
 
         st.subheader("Create Product")
 
+        clients = get_clients()
+        client_options = ["— No Client —"]
+        client_map = {}
+
+        if not clients.empty:
+            client_options += [
+                f"{row['id']} — {row['name']}"
+                for _, row in clients.iterrows()
+            ]
+            client_map = {
+                f"{row['id']} — {row['name']}": row['name']
+                for _, row in clients.iterrows()
+            }
+
         with st.form("create_template"):
 
             name = st.text_input("Product Name")
@@ -1959,7 +1973,12 @@ elif menu == "Product Templates":
                 ]
             )
 
-            client_name = st.text_input("Client")
+            client_selection = st.selectbox(
+                "Client",
+                client_options,
+                key="create_product_client"
+            )
+            client_name = client_map.get(client_selection)
 
             category = st.text_input("Category")
 
@@ -2033,10 +2052,33 @@ elif menu == "Product Templates":
                     )
                 )
 
-                edit_client = st.text_input(
-                    "Client",
-                    value=str(edit_row["client_name"] or "")
+                edit_client_options = ["— No Client —"]
+                edit_client_map = {}
+
+                if not clients.empty:
+                    edit_client_options += [
+                        f"{row['id']} — {row['name']}"
+                        for _, row in clients.iterrows()
+                    ]
+                    edit_client_map = {
+                        f"{row['id']} — {row['name']}": row['name']
+                        for _, row in clients.iterrows()
+                    }
+
+                current_client = str(edit_row["client_name"] or "")
+                current_client_option = next(
+                    (label for label, client_name in edit_client_map.items()
+                     if client_name == current_client),
+                    "— No Client —"
                 )
+
+                edit_client_selection = st.selectbox(
+                    "Client",
+                    edit_client_options,
+                    index=edit_client_options.index(current_client_option),
+                    key="edit_product_client"
+                )
+                edit_client = edit_client_map.get(edit_client_selection)
 
                 edit_category = st.text_input(
                     "Category",
