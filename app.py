@@ -2004,7 +2004,10 @@ elif menu == "Objects":
                     SELECT
                         (SELECT COUNT(*) FROM reklet.object_items WHERE object_id = %s) AS item_count,
                         (SELECT COUNT(*) FROM reklet.material_transactions WHERE object_id = %s) AS material_tx_count,
-                        (SELECT COUNT(*) FROM reklet.payroll_records WHERE object_id = %s) AS payroll_count,
+                        (SELECT COUNT(*)
+                         FROM reklet.payroll_records pr
+                         JOIN reklet.object_items oi ON oi.id = pr.object_item_id
+                         WHERE oi.object_id = %s) AS payroll_count,
                         (SELECT COUNT(*) FROM reklet.finished_goods WHERE object_id = %s) AS finished_goods_count,
                         (SELECT COUNT(*) FROM reklet.finished_goods_transactions WHERE object_id = %s) AS finished_goods_tx_count
                     """,
