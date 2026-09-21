@@ -2130,49 +2130,6 @@ elif menu == "Изделия":
                 hide_index=True
             )
 
-            st.markdown(
-                "### Удалить строку спецификации"
-            )
-
-            delete_map = {
-
-                f"{row['id']} — "
-                f"{row['material_name']}":
-                    int(row["id"])
-
-                for _, row in specification.iterrows()
-            }
-
-            delete_label = st.selectbox(
-                "Строка спецификации",
-                list(delete_map.keys()),
-                key="delete_spec_row"
-            )
-
-            if st.button(
-                "Удалить строку спецификации"
-            ):
-
-                run_query(
-                    """
-                    DELETE FROM
-                        reklet.product_template_materials
-
-                    WHERE id = %s
-                    """,
-                    (
-                        delete_map[
-                            delete_label
-                        ],
-                    )
-                )
-
-                st.success(
-                    "Удалено."
-                )
-
-                st.rerun()
-
         else:
 
             st.info(
@@ -2267,68 +2224,96 @@ elif menu == "Изделия":
 
 
     # ========================================================
-    # DELETE PRODUCT
+    # DELETIONS — ALWAYS AT THE BOTTOM
     # ========================================================
 
     st.markdown("---")
 
-    st.subheader(
-        "Удалить изделие"
-    )
+    with st.expander("Удаление", expanded=False):
 
-    if not templates.empty:
-
-        delete_product_map = {
-
-            f"{row['id']} — {row['name']}":
-                int(row["id"])
-
-            for _, row in templates.iterrows()
-        }
-
-        delete_product = st.selectbox(
-            "Изделие",
-            list(delete_product_map.keys()),
-            key="delete_product"
+        st.warning(
+            "Внимание: удаление необратимо. Перед удалением убедитесь, "
+            "что выбран правильный объект."
         )
 
-        if st.button(
-            "Удалить изделие",
-            key="delete_product_button"
-        ):
+        if not templates.empty:
+            st.markdown("**Удалить изделие**")
 
-            try:
+            delete_product_map = {
+                f"{row['id']} — {row['name']}": int(row["id"])
+                for _, row in templates.iterrows()
+            }
 
+            delete_product = st.selectbox(
+                "Изделие",
+                list(delete_product_map.keys()),
+                key="delete_product"
+            )
+
+            confirm_product = st.checkbox(
+                "Я понимаю, что удаление изделия необратимо.",
+                key="confirm_delete_product"
+            )
+
+            if st.button(
+                "Удалить изделие",
+                key="delete_product_button",
+                disabled=not confirm_product
+            ):
+                try:
+                    run_query(
+                        """
+                        DELETE FROM
+                            reklet.product_templates
+                        WHERE id = %s
+                        """,
+                        (delete_product_map[delete_product],)
+                    )
+                    st.success("Изделие удалено.")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(
+                        "Изделие нельзя удалить. Возможно, оно уже используется в объекте."
+                    )
+                    st.code(str(e))
+
+        if not specification.empty:
+            st.markdown("---")
+            st.markdown("**Удалить строку спецификации**")
+
+            delete_map = {
+                f"{row['id']} — {row['material_name']}": int(row["id"])
+                for _, row in specification.iterrows()
+            }
+
+            delete_label = st.selectbox(
+                "Строка спецификации",
+                list(delete_map.keys()),
+                key="delete_spec_row"
+            )
+
+            confirm_spec = st.checkbox(
+                "Я понимаю, что удаление строки спецификации необратимо.",
+                key="confirm_delete_spec_row"
+            )
+
+            if st.button(
+                "Удалить строку спецификации",
+                key="delete_spec_row_button",
+                disabled=not confirm_spec
+            ):
                 run_query(
                     """
                     DELETE FROM
-                        reklet.product_templates
-
+                        reklet.product_template_materials
                     WHERE id = %s
                     """,
-                    (
-                        delete_product_map[
-                            delete_product
-                        ],
-                    )
+                    (delete_map[delete_label],)
                 )
-
-                st.success(
-                    "Изделие удалено."
-                )
-
+                st.success("Строка спецификации удалена.")
                 st.rerun()
 
-            except Exception as e:
-
-                st.error(
-                    "Изделие cannot be deleted. "
-                    "It may already be used in an object."
-                )
-
-                st.code(
-                    str(e)
-                )
 
 
 # ============================================================
@@ -3346,59 +3331,48 @@ elif menu == "Поставщики":
 
         st.markdown("---")
 
-        st.subheader(
-            "Удалить поставщика"
-        )
+        with st.expander("Удаление", expanded=False):
+            st.warning(
+                "Внимание: удаление поставщика необратимо. "
+                "Если поставщик используется в материалах, удалить его может быть невозможно."
+            )
 
-        delete_map = {
+            delete_map = {
+                f"{row['id']} — {row['name']}": int(row["id"])
+                for _, row in suppliers.iterrows()
+            }
 
-            f"{row['id']} — {row['name']}":
-                int(row["id"])
+            delete_label = st.selectbox(
+                "Поставщик",
+                list(delete_map.keys()),
+                key="delete_supplier"
+            )
 
-            for _, row in suppliers.iterrows()
-        }
+            confirm_supplier = st.checkbox(
+                "Я понимаю, что удаление поставщика необратимо.",
+                key="confirm_delete_supplier"
+            )
 
-        delete_label = st.selectbox(
-            "Поставщик",
-            list(delete_map.keys()),
-            key="delete_supplier"
-        )
-
-        if st.button(
-            "Удалить поставщика"
-        ):
-
-            try:
-
-                run_query(
-                    """
-                    DELETE FROM
-                        reklet.suppliers
-
-                    WHERE id = %s
-                    """,
-                    (
-                        delete_map[
-                            delete_label
-                        ],
+            if st.button(
+                "Удалить поставщика",
+                key="delete_supplier_button",
+                disabled=not confirm_supplier
+            ):
+                try:
+                    run_query(
+                        """
+                        DELETE FROM
+                            reklet.suppliers
+                        WHERE id = %s
+                        """,
+                        (delete_map[delete_label],)
                     )
-                )
+                    st.success("Поставщик удалён.")
+                    st.rerun()
 
-                st.success(
-                    "Поставщик удалён."
-                )
-
-                st.rerun()
-
-            except Exception as e:
-
-                st.error(
-                    "Поставщика нельзя удалить."
-                )
-
-                st.code(
-                    str(e)
-                )
+                except Exception as e:
+                    st.error("Поставщика нельзя удалить.")
+                    st.code(str(e))
 
 
 # ============================================================
