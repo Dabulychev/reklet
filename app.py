@@ -417,19 +417,6 @@ if not st.session_state["authentication_status"]:
 
 
 # ============================================================
-# LOGOUT
-# ============================================================
-
-if st.button("Выйти", key="logout_top"):
-
-    st.session_state[
-        "authentication_status"
-    ] = None
-
-    st.rerun()
-
-
-# ============================================================
 # HELPER FUNCTIONS
 # ============================================================
 
@@ -550,13 +537,36 @@ def get_objects():
         LEFT JOIN reklet.clients c
             ON c.id = o.client_id
 
-        ORDER BY o.id
+        ORDER BY o.id DESC
         """,
         fetch=True
     )
 
 
+def ensure_material_categories_schema():
+
+    # Совместимость с существующей БД: старые базы могли не иметь
+    # таблицы категорий и поля category_id у материалов.
+    run_query(
+        """
+        CREATE TABLE IF NOT EXISTS reklet.material_categories (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        )
+        """
+    )
+
+    run_query(
+        """
+        ALTER TABLE reklet.materials
+        ADD COLUMN IF NOT EXISTS category_id INTEGER
+        """
+    )
+
+
 def get_materials():
+
+    ensure_material_categories_schema()
 
     return run_query(
         """
@@ -586,6 +596,8 @@ def get_materials():
 
 
 def get_material_categories():
+
+    ensure_material_categories_schema()
 
     return run_query(
         """
@@ -2864,8 +2876,18 @@ elif menu == "Склад материалов":
 
         if not supplier_data.empty:
 
+            supplier_view = supplier_data.copy()
+            supplier_view.columns = [
+                "№",
+                "Поставщик",
+                "Закупочная цена",
+                "Код поставщика",
+                "Условия",
+                "Предпочтительный"
+            ]
+
             st.dataframe(
-                supplier_data,
+                supplier_view,
                 use_container_width=True,
                 hide_index=True
             )
@@ -3339,8 +3361,21 @@ elif menu == "Склад материалов":
 
     if not movements.empty:
 
+        movement_view = movements.copy()
+        movement_view.columns = [
+            "№",
+            "Дата",
+            "Материал",
+            "Поставщик",
+            "Объект",
+            "Операция",
+            "Количество",
+            "Цена за единицу",
+            "Тип операции"
+        ]
+
         st.dataframe(
-            movements,
+            movement_view,
             use_container_width=True,
             hide_index=True
         )
@@ -3693,8 +3728,25 @@ elif menu == "Производство":
 
         else:
 
+            production_view = df.copy()
+            production_view.columns = [
+                "№",
+                "Объект",
+                "Заказчик",
+                "Изделие",
+                "Заказано",
+                "Новое",
+                "В производстве",
+                "Готово",
+                "Отгружено",
+                "Доставлено",
+                "В монтаже",
+                "Смонтировано",
+                "Осталось"
+            ]
+
             st.dataframe(
-                df,
+                production_view,
                 use_container_width=True,
                 hide_index=True
             )
@@ -3980,8 +4032,19 @@ elif menu == "Готовая продукция":
 
     else:
 
+        finished_view = df.copy()
+        finished_view.columns = [
+            "№",
+            "Объект",
+            "Заказчик",
+            "Изделие",
+            "Количество",
+            "Статус",
+            "Дата"
+        ]
+
         st.dataframe(
-            df,
+            finished_view,
             use_container_width=True,
             hide_index=True
         )
@@ -4272,8 +4335,19 @@ elif menu == "Транспорт и логистика":
 
     else:
 
+        transport_view = df.copy()
+        transport_view.columns = [
+            "№",
+            "Объект",
+            "Заказчик",
+            "Адрес",
+            "Готово",
+            "Отгружено",
+            "Доставлено"
+        ]
+
         st.dataframe(
-            df,
+            transport_view,
             use_container_width=True,
             hide_index=True
         )
@@ -4335,8 +4409,18 @@ elif menu == "Транспорт и логистика":
             fetch=True
         )
 
+        detail_view = detail.copy()
+        detail_view.columns = [
+            "Изделие",
+            "Заказано",
+            "Готово",
+            "Отгружено",
+            "Доставлено",
+            "Осталось"
+        ]
+
         st.dataframe(
-            detail,
+            detail_view,
             use_container_width=True,
             hide_index=True
         )
@@ -4417,8 +4501,20 @@ elif menu == "Монтаж":
 
     else:
 
+        installation_view = df.copy()
+        installation_view.columns = [
+            "№",
+            "Объект",
+            "Заказчик",
+            "Заказано",
+            "Доставлено",
+            "В монтаже",
+            "Смонтировано",
+            "Осталось"
+        ]
+
         st.dataframe(
-            df,
+            installation_view,
             use_container_width=True,
             hide_index=True
         )
@@ -4833,8 +4929,22 @@ elif menu == "Отчёты":
 
     if not production_report.empty:
 
+        production_report_view = production_report.copy()
+        production_report_view.columns = [
+            "Объект",
+            "Заказчик",
+            "Заказано",
+            "Новое",
+            "В производстве",
+            "Готово",
+            "Отгружено",
+            "Доставлено",
+            "В монтаже",
+            "Смонтировано"
+        ]
+
         st.dataframe(
-            production_report,
+            production_report_view,
             use_container_width=True,
             hide_index=True
         )
@@ -4882,8 +4992,17 @@ elif menu == "Отчёты":
 
     if not stock_report.empty:
 
+        stock_report_view = stock_report.copy()
+        stock_report_view.columns = [
+            "Материал",
+            "Единица",
+            "Остаток",
+            "Цена за единицу",
+            "Стоимость остатка"
+        ]
+
         st.dataframe(
-            stock_report,
+            stock_report_view,
             use_container_width=True,
             hide_index=True
         )
