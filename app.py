@@ -22,66 +22,83 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* All real Streamlit buttons: rectangular, simple, no rounded corners. */
+    /* Reklet: one static rectangular button style everywhere.
+       No rounded corners, no hover/active color changes, no animation. */
     div.stButton > button,
+    div.stButton > button:hover,
+    div.stButton > button:focus,
+    div.stButton > button:focus-visible,
+    div.stButton > button:active,
     div[data-testid="stFormSubmitButton"] > button,
+    div[data-testid="stFormSubmitButton"] > button:hover,
+    div[data-testid="stFormSubmitButton"] > button:focus,
+    div[data-testid="stFormSubmitButton"] > button:focus-visible,
+    div[data-testid="stFormSubmitButton"] > button:active,
     div[data-testid="stDownloadButton"] > button,
-    div[data-testid="baseButton-secondary"],
-    div[data-testid="baseButton-primary"] {
+    div[data-testid="stDownloadButton"] > button:hover,
+    div[data-testid="stDownloadButton"] > button:focus,
+    div[data-testid="stDownloadButton"] > button:focus-visible,
+    div[data-testid="stDownloadButton"] > button:active {
         border-radius: 0 !important;
+        background: transparent !important;
+        color: #f0f0f0 !important;
+        border: 1px solid #4b4f56 !important;
         box-shadow: none !important;
+        outline: none !important;
+        transform: none !important;
+        transition: none !important;
+        animation: none !important;
         min-height: 38px !important;
     }
 
-    div.stButton > button:hover,
-    div[data-testid="stFormSubmitButton"] > button:hover,
-    div[data-testid="stDownloadButton"] > button:hover {
-        border-radius: 0 !important;
-        box-shadow: none !important;
-    }
-
-    /*
-      Main horizontal navigation and horizontal sub-navigation are radios
-      in Streamlit. Make them look like the same rectangular controls
-      instead of circular radio buttons.
-    */
+    /* Remove Streamlit's radio circles and make horizontal navigation
+       look exactly like simple rectangular text buttons. */
     div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] {
         gap: 6px !important;
         flex-wrap: wrap !important;
     }
 
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label {
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label,
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:hover,
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:focus,
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:active,
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:has(input:checked) {
         border: 1px solid #4b4f56 !important;
         border-radius: 0 !important;
         padding: 7px 14px !important;
         margin: 0 !important;
         background: transparent !important;
+        color: #f0f0f0 !important;
         box-shadow: none !important;
+        outline: none !important;
+        transform: none !important;
+        transition: none !important;
+        animation: none !important;
         cursor: pointer !important;
     }
 
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:hover {
-        border-radius: 0 !important;
-        box-shadow: none !important;
-    }
-
-    /* Remove the circular radio indicator for horizontal navigation. */
+    /* Hide the circular radio indicator completely. */
     div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label > div:first-child {
         display: none !important;
     }
 
-    /* Selected navigation item. */
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:has(input:checked) {
-        background: #f0f0f0 !important;
-        border-color: #f0f0f0 !important;
-        color: #111 !important;
+    /* The active/selected item is intentionally identical to every other item. */
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:has(input:checked) *,
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label * {
+        color: #f0f0f0 !important;
+        transition: none !important;
+        animation: none !important;
     }
 
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:has(input:checked) * {
-        color: #111 !important;
+    /* Disable all UI motion inside these controls. */
+    div.stButton *,
+    div[data-testid="stFormSubmitButton"] *,
+    div[data-testid="stDownloadButton"] *,
+    div[data-testid="stRadio"] * {
+        transition: none !important;
+        animation: none !important;
     }
 
-    /* Keep buttons visually compact and consistent on narrow screens. */
     @media (max-width: 900px) {
         div.stButton > button,
         div[data-testid="stFormSubmitButton"] > button,
