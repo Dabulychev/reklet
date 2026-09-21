@@ -1172,6 +1172,24 @@ elif menu == "Объекты":
 
             templates = get_templates()
 
+            # Показываем при добавлении только изделия заказчика выбранного объекта.
+            # Это не меняет принадлежность изделия в справочнике и не затрагивает БД.
+            object_client_name = str(
+                object_row["client_name"] or ""
+            ).strip()
+
+            if not object_client_name:
+                st.warning(
+                    "У объекта не указан заказчик — нельзя определить список изделий."
+                )
+                templates = templates.iloc[0:0]
+            else:
+                templates = templates[
+                    templates["client_name"].fillna("").astype(str).str.strip().eq(
+                        object_client_name
+                    )
+                ].copy()
+
             if not templates.empty:
 
                 template_map = {
