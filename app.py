@@ -817,6 +817,71 @@ if menu == "Clients":
                 st.rerun()
 
 
+    # --------------------------------------------------------
+    # DELETE CLIENT — LAST AND CONTROLLED
+    # --------------------------------------------------------
+    st.markdown("---")
+    with st.expander("Delete Client", expanded=False):
+        st.warning(
+            "Deleting a client is permanent. A client that is already used "
+            "by an object or product cannot be deleted."
+        )
+
+        clients_for_delete = get_clients()
+
+        if clients_for_delete.empty:
+            st.info("No clients available to delete.")
+        else:
+            client_delete_map = {
+                f"{row['id']} — {row['name']}": int(row['id'])
+                for _, row in clients_for_delete.iterrows()
+            }
+
+            client_delete_label = st.selectbox(
+                "Client to delete",
+                list(client_delete_map.keys()),
+                key="delete_client_select"
+            )
+
+            client_delete_id = client_delete_map[client_delete_label]
+
+            client_refs = run_query(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM reklet.objects WHERE client_id = %s) AS object_count,
+                    (SELECT COUNT(*) FROM reklet.product_templates pt
+                     JOIN reklet.clients c ON c.id = %s
+                     WHERE pt.client_name = c.name) AS product_count
+                """,
+                (client_delete_id, client_delete_id),
+                fetch=True
+            )
+
+            object_count = int(client_refs.iloc[0]["object_count"])
+            product_count = int(client_refs.iloc[0]["product_count"])
+
+            if object_count or product_count:
+                st.error(
+                    f"Cannot delete this client. It is already used. "
+                    f"Objects: {object_count}; Products: {product_count}."
+                )
+            else:
+                confirm_client_delete = st.checkbox(
+                    "I understand that this client will be permanently deleted.",
+                    key="confirm_client_delete"
+                )
+                if st.button("Delete Client", key="delete_client_button"):
+                    if not confirm_client_delete:
+                        st.warning("Please confirm the deletion first.")
+                    else:
+                        run_query(
+                            "DELETE FROM reklet.clients WHERE id = %s",
+                            (client_delete_id,)
+                        )
+                        st.success("Client deleted.")
+                        st.rerun()
+
+
 # ============================================================
 # OBJECTS
 # ============================================================
@@ -1903,6 +1968,81 @@ elif menu == "Objects":
                     )
 
 
+    # --------------------------------------------------------
+    # DELETE OBJECT — LAST AND CONTROLLED
+    # --------------------------------------------------------
+    if sub == "Object List":
+        st.markdown("---")
+        with st.expander("Delete Object", expanded=False):
+            st.warning(
+                "Deleting an object is permanent. An object that has "
+                "products, material issues, payroll, or finished goods "
+                "cannot be deleted."
+            )
+
+            objects_for_delete = get_objects()
+
+            if objects_for_delete.empty:
+                st.info("No objects available to delete.")
+            else:
+                object_delete_map = {
+                    f"{row['id']} — {row['object_name']}"
+                    + (f" — {row['client_name']}" if row['client_name'] else ""): int(row['id'])
+                    for _, row in objects_for_delete.iterrows()
+                }
+
+                object_delete_label = st.selectbox(
+                    "Object to delete",
+                    list(object_delete_map.keys()),
+                    key="delete_object_select"
+                )
+                object_delete_id = object_delete_map[object_delete_label]
+
+                object_refs = run_query(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM reklet.object_items WHERE object_id = %s) AS item_count,
+                        (SELECT COUNT(*) FROM reklet.material_transactions WHERE object_id = %s) AS material_tx_count,
+                        (SELECT COUNT(*) FROM reklet.payroll_records WHERE object_id = %s) AS payroll_count,
+                        (SELECT COUNT(*) FROM reklet.finished_goods WHERE object_id = %s) AS finished_goods_count,
+                        (SELECT COUNT(*) FROM reklet.finished_goods_transactions WHERE object_id = %s) AS finished_goods_tx_count
+                    """,
+                    (object_delete_id,) * 5,
+                    fetch=True
+                )
+
+                refs = object_refs.iloc[0]
+                ref_counts = {
+                    "Products in object": int(refs["item_count"]),
+                    "Material transactions": int(refs["material_tx_count"]),
+                    "Payroll records": int(refs["payroll_count"]),
+                    "Finished goods": int(refs["finished_goods_count"]),
+                    "Finished goods transactions": int(refs["finished_goods_tx_count"]),
+                }
+                used_refs = {k: v for k, v in ref_counts.items() if v}
+
+                if used_refs:
+                    st.error(
+                        "Cannot delete this object because it is already used: "
+                        + "; ".join(f"{k}: {v}" for k, v in used_refs.items())
+                    )
+                else:
+                    confirm_object_delete = st.checkbox(
+                        "I understand that this object will be permanently deleted.",
+                        key="confirm_object_delete"
+                    )
+                    if st.button("Delete Object", key="delete_object_button"):
+                        if not confirm_object_delete:
+                            st.warning("Please confirm the deletion first.")
+                        else:
+                            run_query(
+                                "DELETE FROM reklet.objects WHERE id = %s",
+                                (object_delete_id,)
+                            )
+                            st.success("Object deleted.")
+                            st.rerun()
+
+
 # ============================================================
 # PRODUCT TEMPLATES
 # ============================================================
@@ -2175,37 +2315,51 @@ elif menu == "Product Templates":
             # ------------------------------------------------
 
             st.markdown("---")
-            st.subheader("Delete Product")
+            with st.expander("Delete Product", expanded=False):
+                st.warning(
+                    "Deleting a product is permanent. A product already used "
+                    "in an object or material specification cannot be deleted."
+                )
 
-            delete_product = st.selectbox(
-                "Product",
-                list(product_map.keys()),
-                key="delete_product"
-            )
+                delete_product = st.selectbox(
+                    "Product to delete",
+                    list(product_map.keys()),
+                    key="delete_product"
+                )
+                delete_product_id = product_map[delete_product]
 
-            if st.button(
-                "Delete Product",
-                key="delete_product_button"
-            ):
+                product_refs = run_query(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM reklet.object_items WHERE product_template_id = %s) AS object_count,
+                        (SELECT COUNT(*) FROM reklet.product_template_materials WHERE product_template_id = %s) AS material_count
+                    """,
+                    (delete_product_id, delete_product_id),
+                    fetch=True
+                )
+                product_object_count = int(product_refs.iloc[0]["object_count"])
+                product_material_count = int(product_refs.iloc[0]["material_count"])
 
-                try:
-                    run_query(
-                        """
-                        DELETE FROM reklet.product_templates
-                        WHERE id = %s
-                        """,
-                        (product_map[delete_product],)
-                    )
-
-                    st.success("Product deleted.")
-                    st.rerun()
-
-                except Exception as e:
+                if product_object_count or product_material_count:
                     st.error(
-                        "Product cannot be deleted. "
-                        "It may already be used in an object."
+                        f"Cannot delete this product. Objects: {product_object_count}; "
+                        f"Material specification rows: {product_material_count}."
                     )
-                    st.code(str(e))
+                else:
+                    confirm_product_delete = st.checkbox(
+                        "I understand that this product will be permanently deleted.",
+                        key="confirm_product_delete"
+                    )
+                    if st.button("Delete Product", key="delete_product_button"):
+                        if not confirm_product_delete:
+                            st.warning("Please confirm the deletion first.")
+                        else:
+                            run_query(
+                                "DELETE FROM reklet.product_templates WHERE id = %s",
+                                (delete_product_id,)
+                            )
+                            st.success("Product deleted.")
+                            st.rerun()
 
 
     # ========================================================
@@ -2430,37 +2584,40 @@ elif menu == "Product Templates":
             # =================================================
 
             st.markdown("---")
-            st.subheader("Delete Material")
-
-            if specification.empty:
-                st.info("Nothing to delete.")
-            else:
-                delete_map = {
-                    f"{row['id']} — {row['material_name']}": int(row["id"])
-                    for _, row in specification.iterrows()
-                }
-
-                delete_label = st.selectbox(
-                    "Material",
-                    list(delete_map.keys()),
-                    key="delete_spec_row"
+            with st.expander("Delete Material from Specification", expanded=False):
+                st.warning(
+                    "This removes the material only from this product specification. "
+                    "It does not delete the material from the warehouse."
                 )
 
-                if st.button(
-                    "Delete Material",
-                    key="delete_spec_button"
-                ):
+                if specification.empty:
+                    st.info("Nothing to delete.")
+                else:
+                    delete_map = {
+                        f"{row['id']} — {row['material_name']}": int(row["id"])
+                        for _, row in specification.iterrows()
+                    }
 
-                    run_query(
-                        """
-                        DELETE FROM reklet.product_template_materials
-                        WHERE id = %s
-                        """,
-                        (delete_map[delete_label],)
+                    delete_label = st.selectbox(
+                        "Material to remove",
+                        list(delete_map.keys()),
+                        key="delete_spec_row"
                     )
 
-                    st.success("Material deleted from specification.")
-                    st.rerun()
+                    confirm_spec_delete = st.checkbox(
+                        "I understand that this specification row will be removed.",
+                        key="confirm_spec_delete"
+                    )
+                    if st.button("Delete Material", key="delete_spec_button"):
+                        if not confirm_spec_delete:
+                            st.warning("Please confirm the deletion first.")
+                        else:
+                            run_query(
+                                "DELETE FROM reklet.product_template_materials WHERE id = %s",
+                                (delete_map[delete_label],)
+                            )
+                            st.success("Material deleted from specification.")
+                            st.rerun()
 
 
 # ============================================================
@@ -3348,59 +3505,56 @@ elif menu == "Suppliers":
 
         st.markdown("---")
 
-        st.subheader(
-            "Delete Supplier"
-        )
+        with st.expander("Delete Supplier", expanded=False):
+            st.warning(
+                "Deleting a supplier is permanent. A supplier already used "
+                "in material records or transactions cannot be deleted."
+            )
 
-        delete_map = {
+            delete_map = {
+                f"{row['id']} — {row['name']}": int(row["id"])
+                for _, row in suppliers.iterrows()
+            }
 
-            f"{row['id']} — {row['name']}":
-                int(row["id"])
+            delete_label = st.selectbox(
+                "Supplier to delete",
+                list(delete_map.keys()),
+                key="delete_supplier"
+            )
+            delete_supplier_id = delete_map[delete_label]
 
-            for _, row in suppliers.iterrows()
-        }
+            supplier_refs = run_query(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM reklet.material_suppliers WHERE supplier_id = %s) AS material_supplier_count,
+                    (SELECT COUNT(*) FROM reklet.material_transactions WHERE supplier_id = %s) AS transaction_count
+                """,
+                (delete_supplier_id, delete_supplier_id),
+                fetch=True
+            )
+            material_supplier_count = int(supplier_refs.iloc[0]["material_supplier_count"])
+            transaction_count = int(supplier_refs.iloc[0]["transaction_count"])
 
-        delete_label = st.selectbox(
-            "Supplier",
-            list(delete_map.keys()),
-            key="delete_supplier"
-        )
-
-        if st.button(
-            "Delete Supplier"
-        ):
-
-            try:
-
-                run_query(
-                    """
-                    DELETE FROM
-                        reklet.suppliers
-
-                    WHERE id = %s
-                    """,
-                    (
-                        delete_map[
-                            delete_label
-                        ],
-                    )
-                )
-
-                st.success(
-                    "Supplier deleted."
-                )
-
-                st.rerun()
-
-            except Exception as e:
-
+            if material_supplier_count or transaction_count:
                 st.error(
-                    "Supplier cannot be deleted."
+                    f"Cannot delete this supplier. Material links: {material_supplier_count}; "
+                    f"Transactions: {transaction_count}."
                 )
-
-                st.code(
-                    str(e)
+            else:
+                confirm_supplier_delete = st.checkbox(
+                    "I understand that this supplier will be permanently deleted.",
+                    key="confirm_supplier_delete"
                 )
+                if st.button("Delete Supplier", key="delete_supplier_button"):
+                    if not confirm_supplier_delete:
+                        st.warning("Please confirm the deletion first.")
+                    else:
+                        run_query(
+                            "DELETE FROM reklet.suppliers WHERE id = %s",
+                            (delete_supplier_id,)
+                        )
+                        st.success("Supplier deleted.")
+                        st.rerun()
 
 
 # ============================================================
