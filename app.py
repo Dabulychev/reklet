@@ -1209,13 +1209,30 @@ elif menu == "Objects":
                 "Add Product"
             )
 
+            # Show only product templates belonging to the selected object's client.
+            # A product can have the same name/dimensions for different clients,
+            # so the client assigned to the object is the filter here.
             templates = get_templates()
+            object_client_name = str(
+                object_row["client_name"] or ""
+            ).strip()
+
+            if not object_client_name:
+                st.warning(
+                    "This object has no client assigned, so products cannot be filtered by client."
+                )
+                templates = templates.iloc[0:0]
+            else:
+                templates = templates[
+                    templates["client_name"].fillna("").astype(str).str.strip().eq(
+                        object_client_name
+                    )
+                ].copy()
 
             if not templates.empty:
 
                 template_map = {
-                    f"{row['name']} — "
-                    f"{row['client_name'] or 'General'}":
+                    f"{row['name']} — {row['client_name']}":
                         int(row["id"])
 
                     for _, row in templates.iterrows()
