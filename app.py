@@ -567,14 +567,31 @@ def get_materials():
             u.name AS unit_name,
             m.cost_per_unit,
             m.stock_quantity,
-            m.default_waste_coefficient
+            m.default_waste_coefficient,
+            m.category_id,
+            mc.name AS category_name
 
         FROM reklet.materials m
+
+        LEFT JOIN reklet.material_categories mc
+            ON mc.id = m.category_id
 
         LEFT JOIN reklet.units u
             ON u.id = m.unit_id
 
         ORDER BY m.name
+        """,
+        fetch=True
+    )
+
+
+def get_material_categories():
+
+    return run_query(
+        """
+        SELECT id, name
+        FROM reklet.material_categories
+        ORDER BY name
         """,
         fetch=True
     )
@@ -1230,39 +1247,76 @@ elif menu == "Объекты":
                             templates["id"] == template_id
                         ].iloc[0]
 
-                        run_query(
+                        existing_item = run_query(
                             """
-                            INSERT INTO reklet.object_items
-                            (
-                                object_id,
-                                product_template_id,
-                                template_id,
-                                quantity_needed,
-                                item_name,
-                                quantity,
-                                qty_new,
-                                status
-                            )
-
-                            VALUES
-                            (
-                                %s,%s,%s,%s,%s,%s,%s,'New'
-                            )
+                            SELECT id
+                            FROM reklet.object_items
+                            WHERE object_id = %s
+                              AND product_template_id = %s
+                            ORDER BY id
+                            LIMIT 1
                             """,
-                            (
-                                object_id,
-                                template_id,
-                                template_id,
-                                quantity,
-                                template_row["name"],
-                                quantity,
-                                quantity
-                            )
+                            (object_id, template_id),
+                            fetch=True
                         )
 
-                        st.success(
-                            "Изделие добавлено."
-                        )
+                        if not existing_item.empty:
+
+                            existing_id = safe_int(
+                                existing_item.iloc[0]["id"]
+                            )
+
+                            run_query(
+                                """
+                                UPDATE reklet.object_items
+                                SET
+                                    quantity = COALESCE(quantity, 0) + %s,
+                                    quantity_needed = COALESCE(quantity_needed, 0) + %s,
+                                    qty_new = COALESCE(qty_new, 0) + %s
+                                WHERE id = %s
+                                """,
+                                (quantity, quantity, quantity, existing_id)
+                            )
+
+                            st.success(
+                                "Количество изделия увеличено."
+                            )
+
+                        else:
+
+                            run_query(
+                                """
+                                INSERT INTO reklet.object_items
+                                (
+                                    object_id,
+                                    product_template_id,
+                                    template_id,
+                                    quantity_needed,
+                                    item_name,
+                                    quantity,
+                                    qty_new,
+                                    status
+                                )
+
+                                VALUES
+                                (
+                                    %s,%s,%s,%s,%s,%s,%s,'New'
+                                )
+                                """,
+                                (
+                                    object_id,
+                                    template_id,
+                                    template_id,
+                                    quantity,
+                                    template_row["name"],
+                                    quantity,
+                                    quantity
+                                )
+                            )
+
+                            st.success(
+                                "Изделие добавлено."
+                            )
 
                         st.rerun()
 
@@ -1877,6 +1931,31 @@ elif menu == "Изделия":
 
     templates = get_templates()
 
+    client_filter_options = ["Все заказчики"]
+    if not templates.empty:
+        client_filter_options += sorted(
+            templates["client_name"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .loc[lambda x: x != ""]
+            .unique()
+            .tolist()
+        )
+
+    selected_client_filter = st.selectbox(
+        "Заказчик",
+        client_filter_options,
+        key="products_client_filter"
+    )
+
+    if selected_client_filter != "Все заказчики":
+        templates = templates[
+            templates["client_name"].fillna("").astype(str).str.strip().eq(
+                selected_client_filter
+            )
+        ].copy()
+
 
     # ========================================================
     # CREATE
@@ -2466,16 +2545,46 @@ elif menu == "Склад материалов":
     # MATERIAL LIST
     # ========================================================
 
-    if not materials.empty:
+    categories = get_material_categories()
+    category_map = {
+        str(row["name"]): int(row["id"])
+        for _, row in categories.iterrows()
+    }
 
-        st.subheader(
-            "Материалы"
-        )
+    st.subheader("Перечень материалов")
 
-        display = materials[
+    category_options = ["Все материалы", "Без категории"] + (
+        categories["name"].astype(str).tolist()
+        if not categories.empty else []
+    )
+
+    material_category_filter = st.selectbox(
+        "Отбор по категории",
+        category_options,
+        key="material_category_filter"
+    )
+
+    filtered_materials = materials.copy()
+
+    if material_category_filter == "Без категории":
+        filtered_materials = filtered_materials[
+            filtered_materials["category_id"].isna()
+        ].copy()
+    elif material_category_filter != "Все материалы":
+        filtered_materials = filtered_materials[
+            filtered_materials["category_name"].fillna("").astype(str).eq(
+                material_category_filter
+            )
+        ].copy()
+
+    if filtered_materials.empty:
+        st.info("Материалы по выбранному отбору отсутствуют.")
+    else:
+        display = filtered_materials[
             [
                 "id",
                 "name",
+                "category_name",
                 "unit_name",
                 "cost_per_unit",
                 "stock_quantity",
@@ -2483,65 +2592,211 @@ elif menu == "Склад материалов":
             ]
         ].copy()
 
-        edited = data_editor_ru(
+        display.columns = [
+            "№", "Материал", "Категория", "Единица",
+            "Цена за единицу", "Остаток", "Коэффициент отходов"
+        ]
+
+        edited = st.data_editor(
             display,
             key="materials_editor",
-            use_container_width=True
+            use_container_width=True,
+            hide_index=True,
+            disabled=["№", "Единица"]
         )
 
         if st.button(
-            "Сохранить изменения материалов"
+            "Сохранить изменения материалов",
+            key="save_materials"
         ):
-
             for _, row in edited.iterrows():
+                cat_name = str(row["Категория"] or "").strip()
+                cat_id = category_map.get(cat_name) if cat_name else None
 
                 run_query(
                     """
                     UPDATE reklet.materials
-
                     SET
-
                         name = %s,
-
+                        category_id = %s,
                         cost_per_unit = %s,
-
                         stock_quantity = %s,
-
                         default_waste_coefficient = %s
-
                     WHERE id = %s
                     """,
                     (
-                        row["name"],
-                        safe_float(
-                            row["cost_per_unit"]
-                        ),
-                        safe_float(
-                            row["stock_quantity"]
-                        ),
-                        safe_float(
-                            row[
-                                "default_waste_coefficient"
-                            ],
-                            1.20
-                        ),
-                        safe_int(
-                            row["id"]
-                        )
+                        str(row["Материал"]).strip(),
+                        cat_id,
+                        safe_float(row["Цена за единицу"]),
+                        safe_float(row["Остаток"]),
+                        safe_float(row["Коэффициент отходов"], 1.20),
+                        safe_int(row["№"])
                     )
                 )
 
-            st.success(
-                "Сохранено."
-            )
-
+            st.success("Изменения сохранены.")
             st.rerun()
 
-    else:
+    st.markdown("---")
+    st.subheader("Добавить материал")
 
-        st.info(
-            "Нет материалов."
+    units = run_query(
+        "SELECT id, name FROM reklet.units ORDER BY name",
+        fetch=True
+    )
+
+    unit_map = {
+        str(row["name"]): int(row["id"])
+        for _, row in units.iterrows()
+    } if not units.empty else {}
+
+    create_category_options = ["— Без категории —"] + (
+        categories["name"].astype(str).tolist()
+        if not categories.empty else []
+    )
+
+    with st.form("create_material"):
+        material_name = st.text_input("Название материала")
+
+        unit_name = (
+            st.selectbox("Единица измерения", list(unit_map.keys()))
+            if unit_map else None
         )
+
+        create_category = st.selectbox(
+            "Категория",
+            create_category_options
+        )
+
+        cost = st.number_input(
+            "Цена за единицу",
+            min_value=0.0,
+            value=0.0,
+            format="%.2f"
+        )
+
+        stock = st.number_input(
+            "Начальный остаток",
+            min_value=0.0,
+            value=0.0,
+            format="%.4f"
+        )
+
+        waste = st.number_input(
+            "Коэффициент отходов",
+            min_value=0.0,
+            value=1.20,
+            format="%.2f"
+        )
+
+        submit = st.form_submit_button("Добавить материал")
+
+        if submit:
+            if not material_name.strip() or not unit_map:
+                st.warning("Укажите название материала и единицу измерения.")
+            else:
+                cat_id = (
+                    category_map.get(create_category)
+                    if create_category != "— Без категории —"
+                    else None
+                )
+
+                run_query(
+                    """
+                    INSERT INTO reklet.materials
+                    (
+                        name,
+                        unit_id,
+                        category_id,
+                        cost_per_unit,
+                        stock_quantity,
+                        default_waste_coefficient
+                    )
+                    VALUES (%s,%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        material_name.strip(),
+                        unit_map[unit_name],
+                        cat_id,
+                        cost,
+                        stock,
+                        waste
+                    )
+                )
+
+                st.success("Материал добавлен.")
+                st.rerun()
+
+    st.markdown("---")
+    st.subheader("Категории материалов")
+
+    cat_display = categories.copy()
+
+    if not cat_display.empty:
+        cat_display.columns = ["№", "Категория"] + list(
+            cat_display.columns[2:]
+        )
+
+        st.dataframe(
+            cat_display[["№", "Категория"]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        edit_cat_map = {
+            f"{row['id']} — {row['name']}": int(row["id"])
+            for _, row in categories.iterrows()
+        }
+
+        edit_cat_label = st.selectbox(
+            "Категория для исправления",
+            list(edit_cat_map.keys()),
+            key="edit_material_category"
+        )
+
+        edit_cat_id = edit_cat_map[edit_cat_label]
+        edit_cat_name = str(
+            categories[categories["id"] == edit_cat_id].iloc[0]["name"]
+        )
+
+        with st.form("edit_material_category_form"):
+            new_cat_name = st.text_input(
+                "Название категории",
+                value=edit_cat_name
+            )
+
+            if st.form_submit_button("Сохранить категорию"):
+                if new_cat_name.strip():
+                    run_query(
+                        """
+                        UPDATE reklet.material_categories
+                        SET name = %s
+                        WHERE id = %s
+                        """,
+                        (new_cat_name.strip(), edit_cat_id)
+                    )
+                    st.success("Категория сохранена.")
+                    st.rerun()
+
+    with st.form("add_material_category"):
+        new_category = st.text_input("Новая категория")
+
+        if st.form_submit_button("Добавить категорию"):
+            if new_category.strip():
+                try:
+                    run_query(
+                        """
+                        INSERT INTO reklet.material_categories (name)
+                        VALUES (%s)
+                        """,
+                        (new_category.strip(),)
+                    )
+                    st.success("Категория добавлена.")
+                    st.rerun()
+                except Exception:
+                    st.error(
+                        "Такая категория уже существует или не может быть добавлена."
+                    )
 
 
     # ========================================================
