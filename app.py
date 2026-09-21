@@ -451,44 +451,6 @@ def safe_float(value, default=0.0):
 
 
 def data_editor_ru(df, **kwargs):
-
-    labels = {
-        "id": "ID",
-        "name": "Название",
-        "client_name": "Клиент",
-        "object_name": "Объект",
-        "address": "Адрес",
-        "contact_info": "Контактная информация",
-        "contact_person": "Контактное лицо",
-        "phone": "Телефон",
-        "email": "Email",
-        "category": "Категория",
-        "type": "Тип",
-        "item_name": "Изделие",
-        "quantity": "Количество",
-        "quantity_needed": "Требуется",
-        "qty_new": "Новое",
-        "qty_production": "В производстве",
-        "qty_ready": "Готово",
-        "qty_shipped": "Отгружено",
-        "qty_arrived": "Доставлено",
-        "qty_installing": "В монтаже",
-        "qty_installed": "Смонтировано",
-        "material_name": "Материал",
-        "material": "Материал",
-        "supplier": "Поставщик",
-        "supplier_code": "Код поставщика",
-        "unit_name": "Единица",
-        "cost_per_unit": "Цена за единицу",
-        "stock_quantity": "Остаток",
-        "default_waste_coefficient": "Коэффициент отходов",
-        "quantity_per_unit": "Количество на изделие",
-        "waste_coefficient": "Коэффициент отходов",
-        "purchase_price": "Закупочная цена",
-        "conditions": "Условия",
-        "is_preferred": "Предпочтительный",
-    }
-    kwargs.setdefault("column_config", {k: v for k, v in labels.items() if k in df.columns})
     return st.data_editor(df, **kwargs)
 
 
@@ -543,30 +505,9 @@ def get_objects():
     )
 
 
-def ensure_material_categories_schema():
-
-    # Совместимость с существующей БД: старые базы могли не иметь
-    # таблицы категорий и поля category_id у материалов.
-    run_query(
-        """
-        CREATE TABLE IF NOT EXISTS reklet.material_categories (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE
-        )
-        """
-    )
-
-    run_query(
-        """
-        ALTER TABLE reklet.materials
-        ADD COLUMN IF NOT EXISTS category_id INTEGER
-        """
-    )
 
 
 def get_materials():
-
-    ensure_material_categories_schema()
 
     return run_query(
         """
@@ -596,8 +537,6 @@ def get_materials():
 
 
 def get_material_categories():
-
-    ensure_material_categories_schema()
 
     return run_query(
         """
@@ -722,7 +661,7 @@ if menu == "Клиенты":
         edited = data_editor_ru(
             df,
             key="clients_editor",
-            use_container_width=True,
+            width="stretch",
             num_rows="fixed"
         )
 
@@ -852,7 +791,7 @@ elif menu == "Объекты":
             edited = data_editor_ru(
                 display,
                 key="objects_editor",
-                use_container_width=True
+                width="stretch"
             )
 
             if st.button(
@@ -1101,7 +1040,7 @@ elif menu == "Объекты":
                 edited = data_editor_ru(
                     display,
                     key=f"object_items_{object_id}",
-                    use_container_width=True
+                    width="stretch"
                 )
 
                 if st.button(
@@ -1641,23 +1580,9 @@ elif menu == "Объекты":
                         ]
                     ].copy()
 
-                    product_view.columns = [
-
-                        "Изделие",
-                        "Количество изделий",
-                        "Материал",
-                        "Единица",
-                        "Кол-во / изделие",
-                        "Коэф. отходов",
-                        "Требуется",
-                        "Цена за единицу",
-                        "Стоимость материалов"
-
-                    ]
-
                     st.dataframe(
                         product_view,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True
                     )
 
@@ -1716,21 +1641,9 @@ elif menu == "Объекты":
                         ]
                     ].copy()
 
-                    total_view.columns = [
-
-                        "Материал",
-                        "Единица",
-                        "Требуется",
-                        "Остаток",
-                        "Недостаток",
-                        "Цена за единицу",
-                        "Общая стоимость"
-
-                    ]
-
                     st.dataframe(
                         total_view,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True
                     )
 
@@ -2057,7 +1970,7 @@ elif menu == "Изделия":
         edited = data_editor_ru(
             templates,
             key="templates_editor",
-            use_container_width=True,
+            width="stretch",
             num_rows="fixed"
         )
 
@@ -2182,19 +2095,9 @@ elif menu == "Изделия":
                 ]
             ].copy()
 
-            display.columns = [
-
-                "ID",
-                "Материал",
-                "Единица",
-                "Кол-во / изделие",
-                "Коэф. отходов"
-
-            ]
-
             st.dataframe(
                 display,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -2604,17 +2507,12 @@ elif menu == "Склад материалов":
             ]
         ].copy()
 
-        display.columns = [
-            "№", "Материал", "Категория", "Единица",
-            "Цена за единицу", "Остаток", "Коэффициент отходов"
-        ]
-
         edited = st.data_editor(
             display,
             key="materials_editor",
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
-            disabled=["№", "Единица"]
+            disabled=["id", "unit_name"]
         )
 
         if st.button(
@@ -2622,7 +2520,7 @@ elif menu == "Склад материалов":
             key="save_materials"
         ):
             for _, row in edited.iterrows():
-                cat_name = str(row["Категория"] or "").strip()
+                cat_name = str(row["category_name"] or "").strip()
                 cat_id = category_map.get(cat_name) if cat_name else None
 
                 run_query(
@@ -2637,12 +2535,12 @@ elif menu == "Склад материалов":
                     WHERE id = %s
                     """,
                     (
-                        str(row["Материал"]).strip(),
+                        str(row["name"]).strip(),
                         cat_id,
-                        safe_float(row["Цена за единицу"]),
-                        safe_float(row["Остаток"]),
-                        safe_float(row["Коэффициент отходов"], 1.20),
-                        safe_int(row["№"])
+                        safe_float(row["cost_per_unit"]),
+                        safe_float(row["stock_quantity"]),
+                        safe_float(row["default_waste_coefficient"], 1.20),
+                        safe_int(row["id"])
                     )
                 )
 
@@ -2745,13 +2643,9 @@ elif menu == "Склад материалов":
     cat_display = categories.copy()
 
     if not cat_display.empty:
-        cat_display.columns = ["№", "Категория"] + list(
-            cat_display.columns[2:]
-        )
-
         st.dataframe(
-            cat_display[["№", "Категория"]],
-            use_container_width=True,
+            cat_display[["id", "name"]],
+            width="stretch",
             hide_index=True
         )
 
@@ -2877,18 +2771,9 @@ elif menu == "Склад материалов":
         if not supplier_data.empty:
 
             supplier_view = supplier_data.copy()
-            supplier_view.columns = [
-                "№",
-                "Поставщик",
-                "Закупочная цена",
-                "Код поставщика",
-                "Условия",
-                "Предпочтительный"
-            ]
-
             st.dataframe(
                 supplier_view,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -3362,21 +3247,9 @@ elif menu == "Склад материалов":
     if not movements.empty:
 
         movement_view = movements.copy()
-        movement_view.columns = [
-            "№",
-            "Дата",
-            "Материал",
-            "Поставщик",
-            "Объект",
-            "Операция",
-            "Количество",
-            "Цена за единицу",
-            "Тип операции"
-        ]
-
         st.dataframe(
             movement_view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -3510,7 +3383,7 @@ elif menu == "Поставщики":
         edited = data_editor_ru(
             display,
             key="suppliers_editor",
-            use_container_width=True
+            width="stretch"
         )
 
         if st.button(
@@ -3729,25 +3602,9 @@ elif menu == "Производство":
         else:
 
             production_view = df.copy()
-            production_view.columns = [
-                "№",
-                "Объект",
-                "Заказчик",
-                "Изделие",
-                "Заказано",
-                "Новое",
-                "В производстве",
-                "Готово",
-                "Отгружено",
-                "Доставлено",
-                "В монтаже",
-                "Смонтировано",
-                "Осталось"
-            ]
-
             st.dataframe(
                 production_view,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -4033,19 +3890,9 @@ elif menu == "Готовая продукция":
     else:
 
         finished_view = df.copy()
-        finished_view.columns = [
-            "№",
-            "Объект",
-            "Заказчик",
-            "Изделие",
-            "Количество",
-            "Статус",
-            "Дата"
-        ]
-
         st.dataframe(
             finished_view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -4336,19 +4183,9 @@ elif menu == "Транспорт и логистика":
     else:
 
         transport_view = df.copy()
-        transport_view.columns = [
-            "№",
-            "Объект",
-            "Заказчик",
-            "Адрес",
-            "Готово",
-            "Отгружено",
-            "Доставлено"
-        ]
-
         st.dataframe(
             transport_view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -4410,18 +4247,9 @@ elif menu == "Транспорт и логистика":
         )
 
         detail_view = detail.copy()
-        detail_view.columns = [
-            "Изделие",
-            "Заказано",
-            "Готово",
-            "Отгружено",
-            "Доставлено",
-            "Осталось"
-        ]
-
         st.dataframe(
             detail_view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -4502,20 +4330,9 @@ elif menu == "Монтаж":
     else:
 
         installation_view = df.copy()
-        installation_view.columns = [
-            "№",
-            "Объект",
-            "Заказчик",
-            "Заказано",
-            "Доставлено",
-            "В монтаже",
-            "Смонтировано",
-            "Осталось"
-        ]
-
         st.dataframe(
             installation_view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -4780,7 +4597,7 @@ elif menu == "Зарплата":
 
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -4930,22 +4747,9 @@ elif menu == "Отчёты":
     if not production_report.empty:
 
         production_report_view = production_report.copy()
-        production_report_view.columns = [
-            "Объект",
-            "Заказчик",
-            "Заказано",
-            "Новое",
-            "В производстве",
-            "Готово",
-            "Отгружено",
-            "Доставлено",
-            "В монтаже",
-            "Смонтировано"
-        ]
-
         st.dataframe(
             production_report_view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -4993,16 +4797,8 @@ elif menu == "Отчёты":
     if not stock_report.empty:
 
         stock_report_view = stock_report.copy()
-        stock_report_view.columns = [
-            "Материал",
-            "Единица",
-            "Остаток",
-            "Цена за единицу",
-            "Стоимость остатка"
-        ]
-
         st.dataframe(
             stock_report_view,
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
