@@ -509,6 +509,7 @@ def get_objects():
 
 def get_materials():
 
+    # Core material query does not depend on optional category tables.
     return run_query(
         """
         SELECT
@@ -518,34 +519,58 @@ def get_materials():
             u.name AS unit_name,
             m.cost_per_unit,
             m.stock_quantity,
-            m.default_waste_coefficient,
-            m.category_id,
-            mc.name AS category_name
-
+            m.default_waste_coefficient
         FROM reklet.materials m
-
-        LEFT JOIN reklet.material_categories mc
-            ON mc.id = m.category_id
-
         LEFT JOIN reklet.units u
             ON u.id = m.unit_id
-
         ORDER BY m.name
         """,
         fetch=True
     )
 
 
-def get_material_categories():
+def get_materials_with_categories():
+    try:
+        return run_query(
+            """
+            SELECT
+                m.id,
+                m.name,
+                m.unit_id,
+                u.name AS unit_name,
+                m.cost_per_unit,
+                m.stock_quantity,
+                m.default_waste_coefficient,
+                m.category_id,
+                mc.name AS category_name
+            FROM reklet.materials m
+            LEFT JOIN reklet.material_categories mc
+                ON mc.id = m.category_id
+            LEFT JOIN reklet.units u
+                ON u.id = m.unit_id
+            ORDER BY m.name
+            """,
+            fetch=True
+        )
+    except Exception:
+        materials = get_materials().copy()
+        materials["category_id"] = None
+        materials["category_name"] = None
+        return materials
 
-    return run_query(
-        """
-        SELECT id, name
-        FROM reklet.material_categories
-        ORDER BY name
-        """,
-        fetch=True
-    )
+
+def get_material_categories():
+    try:
+        return run_query(
+            """
+            SELECT id, name
+            FROM reklet.material_categories
+            ORDER BY name
+            """,
+            fetch=True
+        )
+    except Exception:
+        return pd.DataFrame(columns=["id", "name"])
 
 
 def get_suppliers():
@@ -2312,7 +2337,7 @@ elif menu == "Склад материалов":
         "Склад материалов"
     )
 
-    materials = get_materials()
+    materials = get_materials_with_categories()
 
 
     # ========================================================
