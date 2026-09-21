@@ -16,6 +16,87 @@ st.set_page_config(
 
 
 # ============================================================
+# UI STYLE — UNIFIED RECTANGULAR BUTTONS
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+    /* All real Streamlit buttons: rectangular, simple, no rounded corners. */
+    div.stButton > button,
+    div[data-testid="stFormSubmitButton"] > button,
+    div[data-testid="stDownloadButton"] > button,
+    div[data-testid="baseButton-secondary"],
+    div[data-testid="baseButton-primary"] {
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        min-height: 38px !important;
+    }
+
+    div.stButton > button:hover,
+    div[data-testid="stFormSubmitButton"] > button:hover,
+    div[data-testid="stDownloadButton"] > button:hover {
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+
+    /*
+      Main horizontal navigation and horizontal sub-navigation are radios
+      in Streamlit. Make them look like the same rectangular controls
+      instead of circular radio buttons.
+    */
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] {
+        gap: 6px !important;
+        flex-wrap: wrap !important;
+    }
+
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label {
+        border: 1px solid #4b4f56 !important;
+        border-radius: 0 !important;
+        padding: 7px 14px !important;
+        margin: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        cursor: pointer !important;
+    }
+
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:hover {
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+
+    /* Remove the circular radio indicator for horizontal navigation. */
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label > div:first-child {
+        display: none !important;
+    }
+
+    /* Selected navigation item. */
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:has(input:checked) {
+        background: #f0f0f0 !important;
+        border-color: #f0f0f0 !important;
+        color: #111 !important;
+    }
+
+    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:has(input:checked) * {
+        color: #111 !important;
+    }
+
+    /* Keep buttons visually compact and consistent on narrow screens. */
+    @media (max-width: 900px) {
+        div.stButton > button,
+        div[data-testid="stFormSubmitButton"] > button,
+        div[data-testid="stDownloadButton"] > button {
+            min-height: 36px !important;
+            padding: 0.3rem 0.7rem !important;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
 # DATABASE CONFIGURATION
 # ============================================================
 
