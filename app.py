@@ -2725,6 +2725,79 @@ elif menu == "Materials Warehouse":
                         st.success("Supplier linked to material.")
                         st.rerun()
 
+        # DELETE IS INTENTIONALLY AT THE BOTTOM SO IT DOES NOT DOMINATE THE
+        # NORMAL MATERIALS WORKFLOW. A material can only be deleted when it
+        # has no dependent records.
+        st.markdown("---")
+        with st.expander("Delete Material", expanded=False):
+            st.caption(
+                "Use this only to remove an incorrect or unused material. "
+                "Materials already used in transactions or product specifications "
+                "cannot be deleted."
+            )
+
+            current_materials = get_materials()
+            if current_materials.empty:
+                st.info("No materials available to delete.")
+            else:
+                delete_material_map = {
+                    row["name"]: int(row["id"])
+                    for _, row in current_materials.iterrows()
+                }
+
+                delete_material_name = st.selectbox(
+                    "Material to delete",
+                    list(delete_material_map.keys()),
+                    key="delete_material_select"
+                )
+                delete_material_id = delete_material_map[delete_material_name]
+
+                refs = run_query(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM reklet.material_transactions
+                         WHERE material_id = %s) AS transaction_count,
+                        (SELECT COUNT(*) FROM reklet.product_template_materials
+                         WHERE material_id = %s) AS specification_count,
+                        (SELECT COUNT(*) FROM reklet.material_suppliers
+                         WHERE material_id = %s) AS supplier_count
+                    """,
+                    (delete_material_id, delete_material_id, delete_material_id),
+                    fetch=True
+                )
+
+                transaction_count = int(refs.iloc[0]["transaction_count"])
+                specification_count = int(refs.iloc[0]["specification_count"])
+                supplier_count = int(refs.iloc[0]["supplier_count"])
+
+                if any([transaction_count, specification_count, supplier_count]):
+                    st.warning(
+                        f"Cannot delete **{delete_material_name}** because it is already "
+                        f"used. Transactions: {transaction_count}; "
+                        f"Product specifications: {specification_count}; "
+                        f"Suppliers: {supplier_count}."
+                    )
+                else:
+                    with st.form("delete_material_form"):
+                        confirm_delete = st.checkbox(
+                            f"I want to permanently delete '{delete_material_name}'"
+                        )
+                        delete_submit = st.form_submit_button(
+                            "Delete Material",
+                            type="secondary"
+                        )
+
+                    if delete_submit:
+                        if not confirm_delete:
+                            st.warning("Please confirm deletion first.")
+                        else:
+                            run_query(
+                                "DELETE FROM reklet.materials WHERE id = %s",
+                                (delete_material_id,)
+                            )
+                            st.success(f"Material '{delete_material_name}' deleted.")
+                            st.rerun()
+
     # ========================================================
     # GOODS RECEIPT — MULTI-LINE INVOICE
     # ========================================================
