@@ -508,7 +508,7 @@ def get_objects():
         LEFT JOIN reklet.clients c
             ON c.id = o.client_id
 
-        ORDER BY o.id
+        ORDER BY o.id DESC
         """,
         fetch=True
     )
@@ -597,7 +597,7 @@ def get_object_items(object_id):
 
         WHERE oi.object_id = %s
 
-        ORDER BY oi.id
+        ORDER BY oi.id DESC
         """,
         (object_id,),
         fetch=True
@@ -610,17 +610,17 @@ def get_object_items(object_id):
 
 menu_options = [
 
-    "Clients",
-    "Objects",
-    "Product Templates",
-    "Materials Warehouse",
-    "Suppliers",
-    "Production",
-    "Finished Goods",
-    "Transport & Logistics",
-    "Installation",
-    "Payroll",
-    "Reports"
+    "Клиенты",
+    "Объекты",
+    "Изделия",
+    "Склад материалов",
+    "Поставщики",
+    "Производство",
+    "Готовая продукция",
+    "Транспорт и логистика",
+    "Монтаж",
+    "Зарплата",
+    "Отчёты"
 
 ]
 
@@ -640,7 +640,7 @@ st.markdown("---")
 # CLIENTS
 # ============================================================
 
-if menu == "Clients":
+if menu == "Клиенты":
 
     st.header("Clients")
 
@@ -740,16 +740,16 @@ if menu == "Clients":
 # OBJECTS
 # ============================================================
 
-elif menu == "Objects":
+elif menu == "Объекты":
 
-    st.header("Objects")
+    st.header("Объекты")
 
     sub = st.radio(
-        "Objects",
+        "Объекты",
         [
-            "Object List",
-            "Object Content",
-            "Material Requirements"
+            "Перечень объектов",
+            "Содержимое объекта",
+            "Потребность в материалах"
         ],
         horizontal=True
     )
@@ -761,7 +761,7 @@ elif menu == "Objects":
     # OBJECT LIST
     # ========================================================
 
-    if sub == "Object List":
+    if sub == "Перечень объектов":
 
         clients = get_clients()
 
@@ -778,6 +778,13 @@ elif menu == "Objects":
                 ]
             ].copy()
 
+            display.columns = [
+                "ID",
+                "Объект",
+                "Заказчик",
+                "Адрес"
+            ]
+
             edited = st.data_editor(
                 display,
                 key="objects_editor",
@@ -785,7 +792,7 @@ elif menu == "Objects":
             )
 
             if st.button(
-                "Save Changes",
+                "Сохранить изменения",
                 key="save_objects"
             ):
 
@@ -802,9 +809,9 @@ elif menu == "Objects":
                         WHERE id = %s
                         """,
                         (
-                            row["object_name"],
-                            row["address"],
-                            safe_int(row["id"])
+                            row["Объект"],
+                            row["Адрес"],
+                            safe_int(row["ID"])
                         )
                     )
 
@@ -815,7 +822,7 @@ elif menu == "Objects":
 
         st.markdown("---")
 
-        st.subheader("Create Object")
+        st.subheader("Создать объект")
 
         client_map = {}
 
@@ -830,30 +837,30 @@ elif menu == "Objects":
         with st.form("create_object"):
 
             client_name = st.selectbox(
-                "Client",
+                "Заказчик",
                 list(client_map.keys())
                 if client_map
                 else []
             )
 
             object_name = st.text_input(
-                "Object Name"
+                "Название объекта"
             )
 
             address = st.text_input(
-                "Address"
+                "Адрес"
             )
 
             phone = st.text_input(
-                "Phone"
+                "Телефон"
             )
 
             contact_person = st.text_input(
-                "Contact Person"
+                "Контактное лицо"
             )
 
             notes = st.text_area(
-                "Notes"
+                "Примечания"
             )
 
             c1, c2 = st.columns(2)
@@ -861,46 +868,46 @@ elif menu == "Objects":
             with c1:
 
                 distance = st.number_input(
-                    "Transport Distance (km)",
+                    "Расстояние доставки (км)",
                     min_value=0.0,
                     value=0.0
                 )
 
                 delivery_cost = st.number_input(
-                    "Delivery Cost",
+                    "Стоимость доставки (справочно)",
                     min_value=0.0,
                     value=0.0
                 )
 
                 contract_date = st.date_input(
-                    "Contract Date",
+                    "Дата договора",
                     value=None
                 )
 
                 production_start = st.date_input(
-                    "Production Start",
+                    "Начало производства",
                     value=None
                 )
 
                 production_end = st.date_input(
-                    "Production End",
+                    "Окончание производства",
                     value=None
                 )
 
             with c2:
 
                 installation_date = st.date_input(
-                    "Installation Date",
+                    "Дата монтажа",
                     value=None
                 )
 
                 installation_end = st.date_input(
-                    "Installation End",
+                    "Окончание монтажа",
                     value=None
                 )
 
             submit = st.form_submit_button(
-                "Create Object"
+                "Создать объект"
             )
 
             if submit:
@@ -969,7 +976,7 @@ elif menu == "Objects":
     # OBJECT CONTENT
     # ========================================================
 
-    elif sub == "Object Content":
+    elif sub == "Содержимое объекта":
 
         objects = get_objects()
 
@@ -991,7 +998,7 @@ elif menu == "Objects":
             }
 
             selected = st.selectbox(
-                "Object",
+                "Объект",
                 list(object_map.keys())
             )
 
@@ -1027,6 +1034,19 @@ elif menu == "Objects":
                     ]
                 ].copy()
 
+                display.columns = [
+                    "ID",
+                    "Изделие",
+                    "Всего",
+                    "Новое",
+                    "В производстве",
+                    "Готово",
+                    "Отправлено",
+                    "Доставлено",
+                    "В монтаже",
+                    "Установлено"
+                ]
+
                 edited = st.data_editor(
                     display,
                     key=f"object_items_{object_id}",
@@ -1034,38 +1054,38 @@ elif menu == "Objects":
                 )
 
                 if st.button(
-                    "Save Item Quantities",
+                    "Сохранить количества",
                     key=f"save_items_{object_id}"
                 ):
 
                     for _, row in edited.iterrows():
 
                         qty_new = safe_int(
-                            row["qty_new"]
+                            row["Новое"]
                         )
 
                         qty_production = safe_int(
-                            row["qty_production"]
+                            row["В производстве"]
                         )
 
                         qty_ready = safe_int(
-                            row["qty_ready"]
+                            row["Готово"]
                         )
 
                         qty_shipped = safe_int(
-                            row["qty_shipped"]
+                            row["Отправлено"]
                         )
 
                         qty_arrived = safe_int(
-                            row["qty_arrived"]
+                            row["Доставлено"]
                         )
 
                         qty_installing = safe_int(
-                            row["qty_installing"]
+                            row["В монтаже"]
                         )
 
                         qty_installed = safe_int(
-                            row["qty_installed"]
+                            row["Установлено"]
                         )
 
                         total = (
@@ -1097,7 +1117,7 @@ elif menu == "Objects":
                             WHERE id = %s
                             """,
                             (
-                                row["item_name"],
+                                row["Изделие"],
                                 total,
                                 total,
                                 qty_new,
@@ -1107,7 +1127,7 @@ elif menu == "Objects":
                                 qty_arrived,
                                 qty_installing,
                                 qty_installed,
-                                safe_int(row["id"])
+                                safe_int(row["ID"])
                             )
                         )
 
@@ -1125,7 +1145,7 @@ elif menu == "Objects":
             st.markdown("---")
 
             st.subheader(
-                "Add Product"
+                "Добавить изделие"
             )
 
             templates = get_templates()
@@ -1145,19 +1165,19 @@ elif menu == "Objects":
                 ):
 
                     template_label = st.selectbox(
-                        "Product Template",
+                        "Изделие",
                         list(template_map.keys())
                     )
 
                     quantity = st.number_input(
-                        "Quantity",
+                        "Количество",
                         min_value=1,
                         value=1,
                         step=1
                     )
 
                     submit = st.form_submit_button(
-                        "Add Product"
+                        "Добавить изделие"
                     )
 
                     if submit:
@@ -1170,35 +1190,66 @@ elif menu == "Objects":
                             templates["id"] == template_id
                         ].iloc[0]
 
-                        run_query(
+                        existing = run_query(
                             """
-                            INSERT INTO reklet.object_items
-                            (
-                                object_id,
-                                product_template_id,
-                                template_id,
-                                quantity_needed,
-                                item_name,
-                                quantity,
-                                qty_new,
-                                status
+                            SELECT id
+                            FROM reklet.object_items
+                            WHERE object_id = %s
+                              AND product_template_id = %s
+                            ORDER BY id
+                            LIMIT 1
+                            """,
+                            (object_id, template_id),
+                            fetch=True
+                        )
+
+                        if not existing.empty:
+
+                            existing_id = safe_int(existing.iloc[0]["id"])
+
+                            run_query(
+                                """
+                                UPDATE reklet.object_items
+                                SET
+                                    quantity = quantity + %s,
+                                    quantity_needed = quantity_needed + %s,
+                                    qty_new = qty_new + %s
+                                WHERE id = %s
+                                """,
+                                (quantity, quantity, quantity, existing_id)
                             )
 
-                            VALUES
-                            (
-                                %s,%s,%s,%s,%s,%s,%s,'New'
+                        else:
+
+                            run_query(
+                                """
+                                INSERT INTO reklet.object_items
+                                (
+                                    object_id,
+                                    product_template_id,
+                                    template_id,
+                                    quantity_needed,
+                                    item_name,
+                                    quantity,
+                                    qty_new,
+                                    status
+                                )
+
+                                VALUES
+                                (
+                                    %s,%s,%s,%s,%s,%s,%s,'New'
+                                )
+                                """,
+                                (
+                                    object_id,
+                                    template_id,
+                                    template_id,
+                                    quantity,
+                                    template_row["name"],
+                                    quantity,
+                                    quantity
+                                )
                             )
-                            """,
-                            (
-                                object_id,
-                                template_id,
-                                template_id,
-                                quantity,
-                                template_row["name"],
-                                quantity,
-                                quantity
-                            )
-                        )
 
                         st.success(
                             "Product added."
@@ -1210,7 +1261,7 @@ elif menu == "Objects":
             st.markdown("---")
 
             st.subheader(
-                "Specification"
+                "Спецификация"
             )
 
             items_print = get_object_items(
@@ -1229,7 +1280,7 @@ elif menu == "Objects":
                         <td>
                             {escape(
                                 str(
-                                    row["item_name"]
+                                    row["Изделие"]
                                     or ""
                                 )
                             )}
@@ -1354,7 +1405,7 @@ elif menu == "Objects":
     else:
 
         st.subheader(
-            "Material Requirements"
+            "Потребность в материалах"
         )
 
         objects = get_objects()
@@ -1377,7 +1428,7 @@ elif menu == "Objects":
             }
 
             selected = st.selectbox(
-                "Object",
+                "Объект",
                 list(object_map.keys()),
                 key="material_requirement_object"
             )
@@ -1809,7 +1860,7 @@ elif menu == "Objects":
 # PRODUCT TEMPLATES
 # ============================================================
 
-elif menu == "Product Templates":
+elif menu == "Изделия":
 
     st.header(
         "Product Templates"
@@ -2252,7 +2303,7 @@ elif menu == "Product Templates":
 # MATERIALS WAREHOUSE
 # ============================================================
 
-elif menu == "Materials Warehouse":
+elif menu == "Склад материалов":
 
     st.header(
         "Materials Warehouse"
@@ -3035,7 +3086,7 @@ elif menu == "Materials Warehouse":
 # SUPPLIERS
 # ============================================================
 
-elif menu == "Suppliers":
+elif menu == "Поставщики":
 
     st.header(
         "Suppliers"
@@ -3265,7 +3316,7 @@ elif menu == "Suppliers":
 # PRODUCTION
 # ============================================================
 
-elif menu == "Production":
+elif menu == "Производство":
 
     st.header(
         "Production"
@@ -3614,7 +3665,7 @@ elif menu == "Production":
 # FINISHED GOODS
 # ============================================================
 
-elif menu == "Finished Goods":
+elif menu == "Готовая продукция":
 
     st.header(
         "Finished Goods"
@@ -3895,7 +3946,7 @@ elif menu == "Finished Goods":
 # TRANSPORT & LOGISTICS
 # ============================================================
 
-elif menu == "Transport & Logistics":
+elif menu == "Транспорт и логистика":
 
     st.header(
         "Transport & Logistics"
@@ -4031,7 +4082,7 @@ elif menu == "Transport & Logistics":
 # INSTALLATION
 # ============================================================
 
-elif menu == "Installation":
+elif menu == "Монтаж":
 
     st.header(
         "Installation"
@@ -4316,7 +4367,7 @@ elif menu == "Installation":
 # PAYROLL
 # ============================================================
 
-elif menu == "Payroll":
+elif menu == "Зарплата":
 
     st.header(
         "Payroll"
@@ -4378,7 +4429,7 @@ elif menu == "Payroll":
 # REPORTS
 # ============================================================
 
-elif menu == "Reports":
+elif menu == "Отчёты":
 
     st.header(
         "Reports"
