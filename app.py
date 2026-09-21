@@ -1980,7 +1980,21 @@ elif menu == "Product Templates":
             )
             client_name = client_map.get(client_selection)
 
-            category = st.text_input("Category")
+            # Use existing product categories as a dropdown.
+            category_values = sorted({
+                str(value).strip()
+                for value in templates["category"].dropna().tolist()
+                if str(value).strip()
+            }) if "category" in templates.columns else []
+
+            category_options = ["— No Category —"] + category_values
+
+            category_selection = st.selectbox(
+                "Category",
+                category_options,
+                key="create_product_category"
+            )
+            category = None if category_selection == "— No Category —" else category_selection
 
             submit = st.form_submit_button("Create Product")
 
@@ -2080,9 +2094,34 @@ elif menu == "Product Templates":
                 )
                 edit_client = edit_client_map.get(edit_client_selection)
 
-                edit_category = st.text_input(
+                edit_category_values = sorted({
+                    str(value).strip()
+                    for value in templates["category"].dropna().tolist()
+                    if str(value).strip()
+                }) if "category" in templates.columns else []
+
+                edit_category_options = ["— No Category —"] + edit_category_values
+                current_category = str(edit_row["category"] or "").strip()
+
+                if current_category and current_category not in edit_category_options:
+                    edit_category_options.append(current_category)
+
+                current_category_index = (
+                    edit_category_options.index(current_category)
+                    if current_category
+                    else 0
+                )
+
+                edit_category_selection = st.selectbox(
                     "Category",
-                    value=str(edit_row["category"] or "")
+                    edit_category_options,
+                    index=current_category_index,
+                    key="edit_product_category"
+                )
+                edit_category = (
+                    None
+                    if edit_category_selection == "— No Category —"
+                    else edit_category_selection
                 )
 
                 save_product = st.form_submit_button("Save Product Changes")
