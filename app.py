@@ -2345,147 +2345,6 @@ elif menu == "Склад материалов":
 
 
     # ========================================================
-    # CREATE MATERIAL
-    # ========================================================
-
-    with st.expander(
-        "Создать материал",
-        expanded=False
-    ):
-
-        suppliers = get_suppliers()
-
-        units = run_query(
-            """
-            SELECT
-                id,
-                name
-
-            FROM reklet.units
-
-            ORDER BY name
-            """,
-            fetch=True
-        )
-
-        supplier_map = {}
-
-        if not suppliers.empty:
-
-            supplier_map = {
-
-                row["name"]:
-                    int(row["id"])
-
-                for _, row in suppliers.iterrows()
-            }
-
-        unit_map = {}
-
-        if not units.empty:
-
-            unit_map = {
-
-                row["name"]:
-                    int(row["id"])
-
-                for _, row in units.iterrows()
-            }
-
-        with st.form(
-            "create_material"
-        ):
-
-            material_name = st.text_input(
-                "Название материала"
-            )
-
-            if unit_map:
-
-                unit_name = st.selectbox(
-                    "Единица",
-                    list(unit_map.keys())
-                )
-
-            else:
-
-                unit_name = None
-
-                st.warning(
-                    "Сначала создайте единицы измерения."
-                )
-
-            cost = st.number_input(
-                "Цена по умолчанию",
-                min_value=0.0,
-                value=0.0,
-                format="%.2f"
-            )
-
-            stock = st.number_input(
-                "Начальный остаток",
-                min_value=0.0,
-                value=0.0,
-                format="%.4f"
-            )
-
-            waste = st.number_input(
-                "Коэффициент отходов по умолчанию",
-                min_value=0.0,
-                value=1.20,
-                format="%.2f"
-            )
-
-            submit = st.form_submit_button(
-                "Создать материал"
-            )
-
-            if submit:
-
-                if not material_name.strip():
-
-                    st.warning(
-                        "Необходимо указать название материала."
-                    )
-
-                elif not unit_map:
-
-                    st.warning(
-                        "Сначала создайте хотя бы одну единицу измерения."
-                    )
-
-                else:
-
-                    run_query(
-                        """
-                        INSERT INTO reklet.materials
-                        (
-                            name,
-                            unit_id,
-                            cost_per_unit,
-                            stock_quantity,
-                            default_waste_coefficient
-                        )
-
-                        VALUES (%s,%s,%s,%s,%s)
-                        """,
-                        (
-                            material_name,
-                            unit_map[unit_name],
-                            cost,
-                            stock,
-                            waste
-                        )
-                    )
-
-                    st.success(
-                        "Материал создан."
-                    )
-
-                    st.rerun()
-
-
-    # ========================================================
     # MATERIAL LIST
     # ========================================================
 
@@ -2536,11 +2395,26 @@ elif menu == "Склад материалов":
             ]
         ].copy()
 
+        column_config = {
+            "id": st.column_config.NumberColumn("ID", disabled=True),
+            "name": st.column_config.TextColumn("Материал"),
+            "category_name": st.column_config.SelectboxColumn(
+                "Категория",
+                options=[""] + categories["name"].astype(str).tolist(),
+                required=False
+            ),
+            "unit_name": st.column_config.TextColumn("Единица", disabled=True),
+            "cost_per_unit": st.column_config.NumberColumn("Цена за единицу", min_value=0.0, format="%.2f"),
+            "stock_quantity": st.column_config.NumberColumn("Остаток", min_value=0.0, format="%.4f"),
+            "default_waste_coefficient": st.column_config.NumberColumn("Коэффициент отходов", min_value=0.0, format="%.2f")
+        }
+
         edited = st.data_editor(
             display,
             key="materials_editor",
             width="stretch",
             hide_index=True,
+            column_config=column_config,
             disabled=["id", "unit_name"]
         )
 
@@ -2549,7 +2423,7 @@ elif menu == "Склад материалов":
             key="save_materials"
         ):
             for _, row in edited.iterrows():
-                cat_name = str(row["category_name"] or "").strip()
+                cat_name = "" if pd.isna(row["category_name"]) else str(row["category_name"]).strip()
                 cat_id = category_map.get(cat_name) if cat_name else None
 
                 run_query(
@@ -2577,6 +2451,88 @@ elif menu == "Склад материалов":
             st.rerun()
 
     st.markdown("---")
+    st.subheader("Категории материалов")
+
+    # Категории хранятся отдельно от материалов.
+    # Материал только ссылается на выбранную категорию через category_id.
+    cat_display = categories[["id", "name"]].copy() if not categories.empty else pd.DataFrame(columns=["id", "name"])
+
+    if cat_display.empty:
+        st.info("Категорий пока нет. Создайте первую категорию ниже.")
+    else:
+        st.dataframe(
+            cat_display,
+            width="stretch",
+            hide_index=True
+        )
+
+        edit_cat_map = {
+            f"{row['id']} — {row['name']}": int(row["id"])
+            for _, row in categories.iterrows()
+        }
+
+        edit_cat_label = st.selectbox(
+            "Категория для изменения",
+            list(edit_cat_map.keys()),
+            key="material_category_to_edit"
+        )
+        edit_cat_id = edit_cat_map[edit_cat_label]
+        edit_cat_name = str(
+            categories[categories["id"] == edit_cat_id].iloc[0]["name"]
+        )
+
+        with st.form("edit_material_category_form"):
+            new_cat_name = st.text_input(
+                "Новое название категории",
+                value=edit_cat_name
+            )
+            save_cat = st.form_submit_button("Сохранить категорию")
+
+            if save_cat:
+                if not new_cat_name.strip():
+                    st.warning("Укажите название категории.")
+                else:
+                    try:
+                        run_query(
+                            """
+                            UPDATE reklet.material_categories
+                            SET name = %s
+                            WHERE id = %s
+                            """,
+                            (new_cat_name.strip(), edit_cat_id)
+                        )
+                        st.success("Категория сохранена.")
+                        st.rerun()
+                    except Exception:
+                        st.error("Не удалось сохранить категорию. Возможно, такое название уже существует.")
+
+    with st.form("add_material_category_form"):
+        new_category = st.text_input(
+            "Новая категория",
+            placeholder="Например: Листовые материалы"
+        )
+        add_category = st.form_submit_button("Добавить категорию")
+
+        if add_category:
+            if not new_category.strip():
+                st.warning("Укажите название категории.")
+            else:
+                try:
+                    run_query(
+                        """
+                        INSERT INTO reklet.material_categories (name)
+                        VALUES (%s)
+                        """,
+                        (new_category.strip(),)
+                    )
+                    st.success("Категория добавлена.")
+                    st.rerun()
+                except Exception:
+                    st.error("Такая категория уже существует или не может быть добавлена.")
+
+
+
+    st.markdown("---")
     st.subheader("Добавить материал")
 
     units = run_query(
@@ -2594,7 +2550,7 @@ elif menu == "Склад материалов":
         if not categories.empty else []
     )
 
-    with st.form("create_material"):
+    with st.form("add_material_form"):
         material_name = st.text_input("Название материала")
 
         unit_name = (
@@ -2665,74 +2621,6 @@ elif menu == "Склад материалов":
 
                 st.success("Материал добавлен.")
                 st.rerun()
-
-    st.markdown("---")
-    st.subheader("Категории материалов")
-
-    cat_display = categories.copy()
-
-    if not cat_display.empty:
-        st.dataframe(
-            cat_display[["id", "name"]],
-            width="stretch",
-            hide_index=True
-        )
-
-        edit_cat_map = {
-            f"{row['id']} — {row['name']}": int(row["id"])
-            for _, row in categories.iterrows()
-        }
-
-        edit_cat_label = st.selectbox(
-            "Категория для исправления",
-            list(edit_cat_map.keys()),
-            key="edit_material_category"
-        )
-
-        edit_cat_id = edit_cat_map[edit_cat_label]
-        edit_cat_name = str(
-            categories[categories["id"] == edit_cat_id].iloc[0]["name"]
-        )
-
-        with st.form("edit_material_category_form"):
-            new_cat_name = st.text_input(
-                "Название категории",
-                value=edit_cat_name
-            )
-
-            if st.form_submit_button("Сохранить категорию"):
-                if new_cat_name.strip():
-                    run_query(
-                        """
-                        UPDATE reklet.material_categories
-                        SET name = %s
-                        WHERE id = %s
-                        """,
-                        (new_cat_name.strip(), edit_cat_id)
-                    )
-                    st.success("Категория сохранена.")
-                    st.rerun()
-
-    with st.form("add_material_category"):
-        new_category = st.text_input("Новая категория")
-
-        if st.form_submit_button("Добавить категорию"):
-            if new_category.strip():
-                try:
-                    run_query(
-                        """
-                        INSERT INTO reklet.material_categories (name)
-                        VALUES (%s)
-                        """,
-                        (new_category.strip(),)
-                    )
-                    st.success("Категория добавлена.")
-                    st.rerun()
-                except Exception:
-                    st.error(
-                        "Такая категория уже существует или не может быть добавлена."
-                    )
-
 
     # ========================================================
     # SUPPLIERS PER MATERIAL
