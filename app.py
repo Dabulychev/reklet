@@ -879,7 +879,7 @@ if menu == "Заказчики":
                     )
                 )
 
-            st.success("Saved.")
+            st.success("Изменения сохранены.")
 
             st.rerun()
 
@@ -1069,7 +1069,7 @@ elif menu == "Objects":
                         )
                     )
 
-                st.success("Saved.")
+                st.success("Изменения сохранены.")
 
                 st.rerun()
 
@@ -1172,7 +1172,7 @@ elif menu == "Objects":
                 ):
 
                     st.warning(
-                        "Client and Object Name are required."
+                        "Необходимо указать заказчика и название объекта."
                     )
 
                 else:
@@ -1220,7 +1220,7 @@ elif menu == "Objects":
                     )
 
                     st.success(
-                        "Object created."
+                        "Объект создан."
                     )
 
                     st.rerun()
@@ -1237,7 +1237,7 @@ elif menu == "Objects":
         if objects.empty:
 
             st.info(
-                "No objects."
+                "Объектов пока нет."
             )
 
         else:
@@ -1252,7 +1252,7 @@ elif menu == "Objects":
             }
 
             selected = st.selectbox(
-                "Object",
+                "Объект (сначала последние):",
                 list(object_map.keys())
             )
 
@@ -1289,7 +1289,7 @@ elif menu == "Objects":
                 ].copy()
 
                 display.columns = [
-                    "№", "Изделие", "Всего", "К запуску", "В производстве",
+                    "№", "Изделие", "Всего заказано", "К запуску", "В производстве",
                     "Готово", "Отправлено", "Доставлено", "В монтаже", "Установлено"
                 ]
                 edited = st.data_editor(
@@ -1376,14 +1376,14 @@ elif menu == "Objects":
                             )
                         )
 
-                    st.success("Saved.")
+                    st.success("Изменения сохранены.")
 
                     st.rerun()
 
             else:
 
                 st.info(
-                    "No products in this object."
+                    "В этом объекте пока нет изделий."
                 )
 
 
@@ -1599,7 +1599,7 @@ elif menu == "Objects":
                 </h2>
 
                 <p>
-                    <b>Client:</b>
+                    <b>Заказчик:</b>
                     {escape(
                         str(
                             object_row["client_name"]
@@ -1609,7 +1609,7 @@ elif menu == "Objects":
                 </p>
 
                 <p>
-                    <b>Object:</b>
+                    <b>Объект:</b>
                     {escape(
                         str(
                             object_row["object_name"]
@@ -1619,7 +1619,7 @@ elif menu == "Objects":
                 </p>
 
                 <p>
-                    <b>Address:</b>
+                    <b>Адрес:</b>
                     {escape(
                         str(
                             object_row["address"]
@@ -1631,9 +1631,9 @@ elif menu == "Objects":
                 <table>
 
                     <tr>
-                        <th>No.</th>
-                        <th>Product</th>
-                        <th>Quantity</th>
+                        <th>№</th>
+                        <th>Изделие</th>
+                        <th>Количество</th>
                     </tr>
 
                     {rows}
@@ -1650,7 +1650,7 @@ elif menu == "Objects":
             """
 
             st.download_button(
-                "Download Specification HTML",
+                "Скачать спецификацию",
                 data=html,
                 file_name=(
                     f"specification_{object_id}.html"
@@ -1910,7 +1910,7 @@ elif menu == "Objects":
                         "Остаток",
                         "Недостача",
                         "Цена",
-                        "Total Cost"
+                        "Стоимость"
 
                     ]
 
@@ -1927,7 +1927,7 @@ elif menu == "Objects":
                     )
 
                     st.metric(
-                        "Estimated Material Cost",
+                        "Расчётная стоимость материалов",
                         money(total_cost)
                     )
 
@@ -2037,7 +2037,7 @@ elif menu == "Objects":
                         </h2>
 
                         <p>
-                            <b>Client:</b>
+                            <b>Заказчик:</b>
                             {escape(
                                 str(
                                     object_row[
@@ -2049,7 +2049,7 @@ elif menu == "Objects":
                         </p>
 
                         <p>
-                            <b>Object:</b>
+                            <b>Объект:</b>
                             {escape(
                                 str(
                                     object_row[
@@ -2061,7 +2061,7 @@ elif menu == "Objects":
                         </p>
 
                         <p>
-                            <b>Address:</b>
+                            <b>Адрес:</b>
                             {escape(
                                 str(
                                     object_row[
@@ -2076,7 +2076,7 @@ elif menu == "Objects":
 
                             <tr>
 
-                                <th>No.</th>
+                                <th>№</th>
                                 <th>Material</th>
                                 <th>Unit</th>
                                 <th>Required</th>
