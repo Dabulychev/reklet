@@ -9,7 +9,7 @@ from html import escape
 # ============================================================
 
 st.set_page_config(
-    page_title="Reklet — Production Management",
+    page_title="Reklet — Управление производством",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -21,7 +21,7 @@ st.set_page_config(
 
 # All database credentials are stored in Streamlit Cloud Secrets.
 #
-# Required secrets:
+# Требуется secrets:
 #
 # DB_HOST = "aws-0-us-west-2.pooler.supabase.com"
 # DB_PORT = "5432"
@@ -38,7 +38,7 @@ try:
 
 except Exception as e:
 
-    st.error("Database secrets are not configured.")
+    st.error("Параметры подключения к базе данных не настроены.")
 
     st.code(
         """
@@ -51,7 +51,7 @@ DB_PASSWORD = "YOUR_DATABASE_PASSWORD"
     )
 
     st.caption(
-        "Add these values in Streamlit Cloud → Settings → Secrets."
+        "Добавьте эти значения в Streamlit Cloud → Settings → Secrets."
     )
 
     st.stop()
@@ -346,19 +346,19 @@ if "demo_mode" not in st.session_state:
 
 if not st.session_state["authentication_status"]:
 
-    st.title("Reklet — Production Management")
-    st.subheader("Login")
+    st.title("Reklet — Управление производством")
+    st.subheader("Войти")
 
     with st.form("login_form"):
 
-        username_input = st.text_input("Username")
+        username_input = st.text_input("Логин")
 
         password_input = st.text_input(
-            "Password",
+            "Пароль",
             type="password"
         )
 
-        submit_login = st.form_submit_button("Login")
+        submit_login = st.form_submit_button("Войти")
 
         if submit_login:
 
@@ -410,7 +410,7 @@ if not st.session_state["authentication_status"]:
                 st.session_state["authentication_status"] = False
 
                 st.error(
-                    "Invalid username or password"
+                    "Неверный логин или пароль"
                 )
 
     st.stop()
@@ -420,7 +420,7 @@ if not st.session_state["authentication_status"]:
 # LOGOUT
 # ============================================================
 
-if st.sidebar.button("Logout"):
+if st.button("Выйти", key="logout_top"):
 
     st.session_state[
         "authentication_status"
@@ -461,6 +461,48 @@ def safe_float(value, default=0.0):
     except Exception:
 
         return default
+
+
+def data_editor_ru(df, **kwargs):
+
+    labels = {
+        "id": "ID",
+        "name": "Название",
+        "client_name": "Клиент",
+        "object_name": "Объект",
+        "address": "Адрес",
+        "contact_info": "Контактная информация",
+        "contact_person": "Контактное лицо",
+        "phone": "Телефон",
+        "email": "Email",
+        "category": "Категория",
+        "type": "Тип",
+        "item_name": "Изделие",
+        "quantity": "Количество",
+        "quantity_needed": "Требуется",
+        "qty_new": "Новое",
+        "qty_production": "В производстве",
+        "qty_ready": "Готово",
+        "qty_shipped": "Отгружено",
+        "qty_arrived": "Доставлено",
+        "qty_installing": "В монтаже",
+        "qty_installed": "Смонтировано",
+        "material_name": "Материал",
+        "material": "Материал",
+        "supplier": "Поставщик",
+        "supplier_code": "Код поставщика",
+        "unit_name": "Единица",
+        "cost_per_unit": "Цена за единицу",
+        "stock_quantity": "Остаток",
+        "default_waste_coefficient": "Коэффициент отходов",
+        "quantity_per_unit": "Количество на изделие",
+        "waste_coefficient": "Коэффициент отходов",
+        "purchase_price": "Закупочная цена",
+        "conditions": "Условия",
+        "is_preferred": "Предпочтительный",
+    }
+    kwargs.setdefault("column_config", {k: v for k, v in labels.items() if k in df.columns})
+    return st.data_editor(df, **kwargs)
 
 
 def money(value):
@@ -508,7 +550,7 @@ def get_objects():
         LEFT JOIN reklet.clients c
             ON c.id = o.client_id
 
-        ORDER BY o.id DESC
+        ORDER BY o.id
         """,
         fetch=True
     )
@@ -597,7 +639,7 @@ def get_object_items(object_id):
 
         WHERE oi.object_id = %s
 
-        ORDER BY oi.id DESC
+        ORDER BY oi.id
         """,
         (object_id,),
         fetch=True
@@ -626,7 +668,7 @@ menu_options = [
 
 
 menu = st.radio(
-    "Navigation",
+    "Раздел",
     menu_options,
     horizontal=True,
     label_visibility="collapsed"
@@ -642,13 +684,13 @@ st.markdown("---")
 
 if menu == "Клиенты":
 
-    st.header("Clients")
+    st.header("Клиенты")
 
     df = get_clients()
 
     if not df.empty:
 
-        edited = st.data_editor(
+        edited = data_editor_ru(
             df,
             key="clients_editor",
             use_container_width=True,
@@ -656,7 +698,7 @@ if menu == "Клиенты":
         )
 
         if st.button(
-            "Save Changes",
+            "Сохранить изменения",
             key="save_clients"
         ):
 
@@ -679,28 +721,28 @@ if menu == "Клиенты":
                     )
                 )
 
-            st.success("Saved.")
+            st.success("Сохранено.")
 
             st.rerun()
 
     else:
 
-        st.info("No clients.")
+        st.info("Нет клиентов.")
 
     st.markdown("---")
 
-    st.subheader("Add Client")
+    st.subheader("Добавить клиента")
 
     with st.form("add_client"):
 
-        name = st.text_input("Name")
+        name = st.text_input("Название")
 
         contact = st.text_area(
-            "Contact"
+            "Контакт"
         )
 
         submit = st.form_submit_button(
-            "Add"
+            "Добавить"
         )
 
         if submit:
@@ -708,7 +750,7 @@ if menu == "Клиенты":
             if not name.strip():
 
                 st.warning(
-                    "Name is required."
+                    "Необходимо указать название."
                 )
 
             else:
@@ -730,7 +772,7 @@ if menu == "Клиенты":
                 )
 
                 st.success(
-                    "Client added."
+                    "Клиент добавлен."
                 )
 
                 st.rerun()
@@ -747,8 +789,8 @@ elif menu == "Объекты":
     sub = st.radio(
         "Объекты",
         [
-            "Перечень объектов",
-            "Содержимое объекта",
+            "Список объектов",
+            "Состав объекта",
             "Потребность в материалах"
         ],
         horizontal=True
@@ -761,7 +803,7 @@ elif menu == "Объекты":
     # OBJECT LIST
     # ========================================================
 
-    if sub == "Перечень объектов":
+    if sub == "Список объектов":
 
         clients = get_clients()
 
@@ -778,14 +820,7 @@ elif menu == "Объекты":
                 ]
             ].copy()
 
-            display.columns = [
-                "ID",
-                "Объект",
-                "Заказчик",
-                "Адрес"
-            ]
-
-            edited = st.data_editor(
+            edited = data_editor_ru(
                 display,
                 key="objects_editor",
                 use_container_width=True
@@ -809,13 +844,13 @@ elif menu == "Объекты":
                         WHERE id = %s
                         """,
                         (
-                            row["Объект"],
-                            row["Адрес"],
-                            safe_int(row["ID"])
+                            row["object_name"],
+                            row["address"],
+                            safe_int(row["id"])
                         )
                     )
 
-                st.success("Saved.")
+                st.success("Сохранено.")
 
                 st.rerun()
 
@@ -837,7 +872,7 @@ elif menu == "Объекты":
         with st.form("create_object"):
 
             client_name = st.selectbox(
-                "Заказчик",
+                "Клиент",
                 list(client_map.keys())
                 if client_map
                 else []
@@ -874,7 +909,7 @@ elif menu == "Объекты":
                 )
 
                 delivery_cost = st.number_input(
-                    "Стоимость доставки (справочно)",
+                    "Стоимость доставки",
                     min_value=0.0,
                     value=0.0
                 )
@@ -918,7 +953,7 @@ elif menu == "Объекты":
                 ):
 
                     st.warning(
-                        "Client and Object Name are required."
+                        "Необходимо указать клиента и название объекта."
                     )
 
                 else:
@@ -966,7 +1001,7 @@ elif menu == "Объекты":
                     )
 
                     st.success(
-                        "Object created."
+                        "Объект создан."
                     )
 
                     st.rerun()
@@ -976,14 +1011,14 @@ elif menu == "Объекты":
     # OBJECT CONTENT
     # ========================================================
 
-    elif sub == "Содержимое объекта":
+    elif sub == "Состав объекта":
 
         objects = get_objects()
 
         if objects.empty:
 
             st.info(
-                "No objects."
+                "Нет объектов."
             )
 
         else:
@@ -1034,58 +1069,45 @@ elif menu == "Объекты":
                     ]
                 ].copy()
 
-                display.columns = [
-                    "ID",
-                    "Изделие",
-                    "Всего",
-                    "Новое",
-                    "В производстве",
-                    "Готово",
-                    "Отправлено",
-                    "Доставлено",
-                    "В монтаже",
-                    "Установлено"
-                ]
-
-                edited = st.data_editor(
+                edited = data_editor_ru(
                     display,
                     key=f"object_items_{object_id}",
                     use_container_width=True
                 )
 
                 if st.button(
-                    "Сохранить количества",
+                    "Сохранить количество",
                     key=f"save_items_{object_id}"
                 ):
 
                     for _, row in edited.iterrows():
 
                         qty_new = safe_int(
-                            row["Новое"]
+                            row["qty_new"]
                         )
 
                         qty_production = safe_int(
-                            row["В производстве"]
+                            row["qty_production"]
                         )
 
                         qty_ready = safe_int(
-                            row["Готово"]
+                            row["qty_ready"]
                         )
 
                         qty_shipped = safe_int(
-                            row["Отправлено"]
+                            row["qty_shipped"]
                         )
 
                         qty_arrived = safe_int(
-                            row["Доставлено"]
+                            row["qty_arrived"]
                         )
 
                         qty_installing = safe_int(
-                            row["В монтаже"]
+                            row["qty_installing"]
                         )
 
                         qty_installed = safe_int(
-                            row["Установлено"]
+                            row["qty_installed"]
                         )
 
                         total = (
@@ -1117,7 +1139,7 @@ elif menu == "Объекты":
                             WHERE id = %s
                             """,
                             (
-                                row["Изделие"],
+                                row["item_name"],
                                 total,
                                 total,
                                 qty_new,
@@ -1127,18 +1149,18 @@ elif menu == "Объекты":
                                 qty_arrived,
                                 qty_installing,
                                 qty_installed,
-                                safe_int(row["ID"])
+                                safe_int(row["id"])
                             )
                         )
 
-                    st.success("Saved.")
+                    st.success("Сохранено.")
 
                     st.rerun()
 
             else:
 
                 st.info(
-                    "No products in this object."
+                    "В этом объекте нет изделий."
                 )
 
 
@@ -1154,7 +1176,7 @@ elif menu == "Объекты":
 
                 template_map = {
                     f"{row['name']} — "
-                    f"{row['client_name'] or 'General'}":
+                    f"{row['client_name'] or 'Общее'}":
                         int(row["id"])
 
                     for _, row in templates.iterrows()
@@ -1190,69 +1212,38 @@ elif menu == "Объекты":
                             templates["id"] == template_id
                         ].iloc[0]
 
-                        existing = run_query(
+                        run_query(
                             """
-                            SELECT id
-                            FROM reklet.object_items
-                            WHERE object_id = %s
-                              AND product_template_id = %s
-                            ORDER BY id
-                            LIMIT 1
+                            INSERT INTO reklet.object_items
+                            (
+                                object_id,
+                                product_template_id,
+                                template_id,
+                                quantity_needed,
+                                item_name,
+                                quantity,
+                                qty_new,
+                                status
+                            )
+
+                            VALUES
+                            (
+                                %s,%s,%s,%s,%s,%s,%s,'New'
+                            )
                             """,
-                            (object_id, template_id),
-                            fetch=True
+                            (
+                                object_id,
+                                template_id,
+                                template_id,
+                                quantity,
+                                template_row["name"],
+                                quantity,
+                                quantity
+                            )
                         )
 
-                        if not existing.empty:
-
-                            existing_id = safe_int(existing.iloc[0]["id"])
-
-                            run_query(
-                                """
-                                UPDATE reklet.object_items
-                                SET
-                                    quantity = quantity + %s,
-                                    quantity_needed = quantity_needed + %s,
-                                    qty_new = qty_new + %s
-                                WHERE id = %s
-                                """,
-                                (quantity, quantity, quantity, existing_id)
-                            )
-
-                        else:
-
-                            run_query(
-                                """
-                                INSERT INTO reklet.object_items
-                                (
-                                    object_id,
-                                    product_template_id,
-                                    template_id,
-                                    quantity_needed,
-                                    item_name,
-                                    quantity,
-                                    qty_new,
-                                    status
-                                )
-
-                                VALUES
-                                (
-                                    %s,%s,%s,%s,%s,%s,%s,'New'
-                                )
-                                """,
-                                (
-                                    object_id,
-                                    template_id,
-                                    template_id,
-                                    quantity,
-                                    template_row["name"],
-                                    quantity,
-                                    quantity
-                                )
-                            )
-
                         st.success(
-                            "Product added."
+                            "Изделие добавлено."
                         )
 
                         st.rerun()
@@ -1280,7 +1271,7 @@ elif menu == "Объекты":
                         <td>
                             {escape(
                                 str(
-                                    row["Изделие"]
+                                    row["item_name"]
                                     or ""
                                 )
                             )}
@@ -1303,7 +1294,7 @@ elif menu == "Объекты":
                 <meta charset="utf-8">
 
                 <title>
-                    Specification
+                    Спецификация
                 </title>
 
                 <style>
@@ -1334,11 +1325,11 @@ elif menu == "Объекты":
             <body>
 
                 <h2>
-                    Object Specification
+                    Объект Спецификация
                 </h2>
 
                 <p>
-                    <b>Client:</b>
+                    <b>Клиент:</b>
                     {escape(
                         str(
                             object_row["client_name"]
@@ -1348,7 +1339,7 @@ elif menu == "Объекты":
                 </p>
 
                 <p>
-                    <b>Object:</b>
+                    <b>Объект:</b>
                     {escape(
                         str(
                             object_row["object_name"]
@@ -1358,7 +1349,7 @@ elif menu == "Объекты":
                 </p>
 
                 <p>
-                    <b>Address:</b>
+                    <b>Адрес:</b>
                     {escape(
                         str(
                             object_row["address"]
@@ -1371,8 +1362,8 @@ elif menu == "Объекты":
 
                     <tr>
                         <th>No.</th>
-                        <th>Product</th>
-                        <th>Quantity</th>
+                        <th>Изделие</th>
+                        <th>Количество</th>
                     </tr>
 
                     {rows}
@@ -1389,7 +1380,7 @@ elif menu == "Объекты":
             """
 
             st.download_button(
-                "Download Specification HTML",
+                "Скачать спецификацию HTML",
                 data=html,
                 file_name=(
                     f"specification_{object_id}.html"
@@ -1413,7 +1404,7 @@ elif menu == "Объекты":
         if objects.empty:
 
             st.info(
-                "No objects."
+                "Нет объектов."
             )
 
         else:
@@ -1448,7 +1439,7 @@ elif menu == "Объекты":
             if items.empty:
 
                 st.info(
-                    "No products assigned to this object."
+                    "К этому объекту не привязаны изделия."
                 )
 
             else:
@@ -1549,7 +1540,7 @@ elif menu == "Объекты":
                     )
 
                     st.markdown(
-                        "### Material Requirements by Product"
+                        "### Потребность в материалах by Изделие"
                     )
 
                     product_view = requirements[
@@ -1568,15 +1559,15 @@ elif menu == "Объекты":
 
                     product_view.columns = [
 
-                        "Product",
-                        "Product Qty",
-                        "Material",
-                        "Unit",
-                        "Qty / Product",
-                        "Waste Coef.",
-                        "Required",
-                        "Unit Cost",
-                        "Material Cost"
+                        "Изделие",
+                        "Количество изделий",
+                        "Материал",
+                        "Единица",
+                        "Кол-во / изделие",
+                        "Коэф. отходов",
+                        "Требуется",
+                        "Цена за единицу",
+                        "Стоимость материалов"
 
                     ]
 
@@ -1587,7 +1578,7 @@ elif menu == "Объекты":
                     )
 
                     st.markdown(
-                        "### Total Material Requirements"
+                        "### Общая потребность в материалах"
                     )
 
                     total_materials = (
@@ -1643,13 +1634,13 @@ elif menu == "Объекты":
 
                     total_view.columns = [
 
-                        "Material",
-                        "Unit",
-                        "Required",
-                        "Stock",
-                        "Shortage",
-                        "Unit Cost",
-                        "Total Cost"
+                        "Материал",
+                        "Единица",
+                        "Требуется",
+                        "Остаток",
+                        "Недостаток",
+                        "Цена за единицу",
+                        "Общая стоимость"
 
                     ]
 
@@ -1666,7 +1657,7 @@ elif menu == "Объекты":
                     )
 
                     st.metric(
-                        "Estimated Material Cost",
+                        "Расчётная стоимость материалов",
                         money(total_cost)
                     )
 
@@ -1741,7 +1732,7 @@ elif menu == "Объекты":
                         <meta charset="utf-8">
 
                         <title>
-                            Material Requirements
+                            Потребность в материалах
                         </title>
 
                         <style>
@@ -1772,11 +1763,11 @@ elif menu == "Объекты":
                     <body>
 
                         <h2>
-                            Material Requirements
+                            Потребность в материалах
                         </h2>
 
                         <p>
-                            <b>Client:</b>
+                            <b>Клиент:</b>
                             {escape(
                                 str(
                                     object_row[
@@ -1788,7 +1779,7 @@ elif menu == "Объекты":
                         </p>
 
                         <p>
-                            <b>Object:</b>
+                            <b>Объект:</b>
                             {escape(
                                 str(
                                     object_row[
@@ -1800,7 +1791,7 @@ elif menu == "Объекты":
                         </p>
 
                         <p>
-                            <b>Address:</b>
+                            <b>Адрес:</b>
                             {escape(
                                 str(
                                     object_row[
@@ -1816,12 +1807,12 @@ elif menu == "Объекты":
                             <tr>
 
                                 <th>No.</th>
-                                <th>Material</th>
-                                <th>Unit</th>
-                                <th>Required</th>
-                                <th>Stock</th>
-                                <th>Shortage</th>
-                                <th>Cost</th>
+                                <th>Материал</th>
+                                <th>Единица</th>
+                                <th>Требуется</th>
+                                <th>Остаток</th>
+                                <th>Недостаток</th>
+                                <th>Стоимость</th>
 
                             </tr>
 
@@ -1831,7 +1822,7 @@ elif menu == "Объекты":
 
                         <h3>
 
-                            Total Material Cost:
+                            Total Стоимость материалов:
                             {float(total_cost):.2f}
 
                         </h3>
@@ -1846,7 +1837,7 @@ elif menu == "Объекты":
                     """
 
                     st.download_button(
-                        "Download Material Requirements HTML",
+                        "Скачать потребность в материалах HTML",
                         data=material_html,
                         file_name=(
                             f"material_requirements_"
@@ -1863,7 +1854,7 @@ elif menu == "Объекты":
 elif menu == "Изделия":
 
     st.header(
-        "Product Templates"
+        "Изделия"
     )
 
     templates = get_templates()
@@ -1874,7 +1865,7 @@ elif menu == "Изделия":
     # ========================================================
 
     with st.expander(
-        "Create Product Template",
+        "Создать изделие",
         expanded=False
     ):
 
@@ -1883,11 +1874,11 @@ elif menu == "Изделия":
         ):
 
             name = st.text_input(
-                "Product Name"
+                "Название изделия"
             )
 
             type_value = st.selectbox(
-                "Type",
+                "Тип",
                 [
                     "recurrent",
                     "custom"
@@ -1895,15 +1886,15 @@ elif menu == "Изделия":
             )
 
             client_name = st.text_input(
-                "Client"
+                "Клиент"
             )
 
             category = st.text_input(
-                "Category"
+                "Категория"
             )
 
             submit = st.form_submit_button(
-                "Create Product"
+                "Создать изделие"
             )
 
             if submit:
@@ -1911,7 +1902,7 @@ elif menu == "Изделия":
                 if not name.strip():
 
                     st.warning(
-                        "Product name is required."
+                        "Необходимо указать название изделия."
                     )
 
                 else:
@@ -1938,7 +1929,7 @@ elif menu == "Изделия":
                     )
 
                     st.success(
-                        "Product created."
+                        "Изделие создано."
                     )
 
                     st.rerun()
@@ -1951,10 +1942,10 @@ elif menu == "Изделия":
     if not templates.empty:
 
         st.subheader(
-            "Products"
+            "Изделия"
         )
 
-        edited = st.data_editor(
+        edited = data_editor_ru(
             templates,
             key="templates_editor",
             use_container_width=True,
@@ -1962,7 +1953,7 @@ elif menu == "Изделия":
         )
 
         if st.button(
-            "Save Product Changes",
+            "Сохранить изменения изделий",
             key="save_templates"
         ):
 
@@ -1991,7 +1982,7 @@ elif menu == "Изделия":
                 )
 
             st.success(
-                "Saved."
+                "Сохранено."
             )
 
             st.rerun()
@@ -2000,13 +1991,13 @@ elif menu == "Изделия":
     st.markdown("---")
 
     st.subheader(
-        "Product Material Specification"
+        "Спецификация материалов изделия"
     )
 
     if templates.empty:
 
         st.info(
-            "Create a product first."
+            "Сначала создайте изделие."
         )
 
     else:
@@ -2015,14 +2006,14 @@ elif menu == "Изделия":
 
             f"{row['id']} — "
             f"{row['name']} — "
-            f"{row['client_name'] or 'General'}":
+            f"{row['client_name'] or 'Общее'}":
                 int(row["id"])
 
             for _, row in templates.iterrows()
         }
 
         selected = st.selectbox(
-            "Product",
+            "Изделие",
             list(template_map.keys()),
             key="template_spec"
         )
@@ -2085,10 +2076,10 @@ elif menu == "Изделия":
             display.columns = [
 
                 "ID",
-                "Material",
-                "Unit",
-                "Qty / Product",
-                "Waste Coef."
+                "Материал",
+                "Единица",
+                "Кол-во / изделие",
+                "Коэф. отходов"
 
             ]
 
@@ -2099,7 +2090,7 @@ elif menu == "Изделия":
             )
 
             st.markdown(
-                "### Delete Specification Row"
+                "### Удалить строку спецификации"
             )
 
             delete_map = {
@@ -2112,13 +2103,13 @@ elif menu == "Изделия":
             }
 
             delete_label = st.selectbox(
-                "Specification Row",
+                "Строка спецификации",
                 list(delete_map.keys()),
                 key="delete_spec_row"
             )
 
             if st.button(
-                "Delete Specification Row"
+                "Удалить строку спецификации"
             ):
 
                 run_query(
@@ -2136,7 +2127,7 @@ elif menu == "Изделия":
                 )
 
                 st.success(
-                    "Deleted."
+                    "Удалено."
                 )
 
                 st.rerun()
@@ -2144,14 +2135,14 @@ elif menu == "Изделия":
         else:
 
             st.info(
-                "No materials in this product specification."
+                "В спецификации этого изделия нет материалов."
             )
 
 
         st.markdown("---")
 
         st.subheader(
-            "Add Material"
+            "Добавить материал"
         )
 
         materials = get_materials()
@@ -2159,7 +2150,7 @@ elif menu == "Изделия":
         if materials.empty:
 
             st.warning(
-                "Create materials in Materials Warehouse first."
+                "Сначала создайте материалы на складе материалов."
             )
 
         else:
@@ -2178,26 +2169,26 @@ elif menu == "Изделия":
             ):
 
                 material_label = st.selectbox(
-                    "Material",
+                    "Материал",
                     list(material_map.keys())
                 )
 
                 quantity_per_unit = st.number_input(
-                    "Quantity per Product",
+                    "Количество на изделие",
                     min_value=0.0001,
                     value=1.0,
                     format="%.4f"
                 )
 
                 waste = st.number_input(
-                    "Waste Coefficient",
+                    "Коэффициент отходов",
                     min_value=0.0,
                     value=1.20,
                     format="%.2f"
                 )
 
                 submit = st.form_submit_button(
-                    "Add Material"
+                    "Добавить материал"
                 )
 
                 if submit:
@@ -2228,7 +2219,7 @@ elif menu == "Изделия":
                     )
 
                     st.success(
-                        "Material added to specification."
+                        "Материал добавлен в спецификацию."
                     )
 
                     st.rerun()
@@ -2241,7 +2232,7 @@ elif menu == "Изделия":
     st.markdown("---")
 
     st.subheader(
-        "Delete Product"
+        "Удалить изделие"
     )
 
     if not templates.empty:
@@ -2255,13 +2246,13 @@ elif menu == "Изделия":
         }
 
         delete_product = st.selectbox(
-            "Product",
+            "Изделие",
             list(delete_product_map.keys()),
             key="delete_product"
         )
 
         if st.button(
-            "Delete Product",
+            "Удалить изделие",
             key="delete_product_button"
         ):
 
@@ -2282,7 +2273,7 @@ elif menu == "Изделия":
                 )
 
                 st.success(
-                    "Product deleted."
+                    "Изделие удалено."
                 )
 
                 st.rerun()
@@ -2290,7 +2281,7 @@ elif menu == "Изделия":
             except Exception as e:
 
                 st.error(
-                    "Product cannot be deleted. "
+                    "Изделие cannot be deleted. "
                     "It may already be used in an object."
                 )
 
@@ -2306,7 +2297,7 @@ elif menu == "Изделия":
 elif menu == "Склад материалов":
 
     st.header(
-        "Materials Warehouse"
+        "Склад материалов"
     )
 
     materials = get_materials()
@@ -2317,7 +2308,7 @@ elif menu == "Склад материалов":
     # ========================================================
 
     with st.expander(
-        "Create Material",
+        "Создать материал",
         expanded=False
     ):
 
@@ -2365,13 +2356,13 @@ elif menu == "Склад материалов":
         ):
 
             material_name = st.text_input(
-                "Material Name"
+                "Название материала"
             )
 
             if unit_map:
 
                 unit_name = st.selectbox(
-                    "Unit",
+                    "Единица",
                     list(unit_map.keys())
                 )
 
@@ -2380,32 +2371,32 @@ elif menu == "Склад материалов":
                 unit_name = None
 
                 st.warning(
-                    "Create units first."
+                    "Сначала создайте единицы измерения."
                 )
 
             cost = st.number_input(
-                "Default Cost",
+                "Цена по умолчанию",
                 min_value=0.0,
                 value=0.0,
                 format="%.2f"
             )
 
             stock = st.number_input(
-                "Opening Stock",
+                "Начальный остаток",
                 min_value=0.0,
                 value=0.0,
                 format="%.4f"
             )
 
             waste = st.number_input(
-                "Default Waste Coefficient",
+                "Коэффициент отходов по умолчанию",
                 min_value=0.0,
                 value=1.20,
                 format="%.2f"
             )
 
             submit = st.form_submit_button(
-                "Create Material"
+                "Создать материал"
             )
 
             if submit:
@@ -2413,13 +2404,13 @@ elif menu == "Склад материалов":
                 if not material_name.strip():
 
                     st.warning(
-                        "Material name is required."
+                        "Необходимо указать название материала."
                     )
 
                 elif not unit_map:
 
                     st.warning(
-                        "Create at least one unit."
+                        "Сначала создайте хотя бы одну единицу измерения."
                     )
 
                 else:
@@ -2447,7 +2438,7 @@ elif menu == "Склад материалов":
                     )
 
                     st.success(
-                        "Material created."
+                        "Материал создан."
                     )
 
                     st.rerun()
@@ -2460,7 +2451,7 @@ elif menu == "Склад материалов":
     if not materials.empty:
 
         st.subheader(
-            "Materials"
+            "Материалы"
         )
 
         display = materials[
@@ -2474,14 +2465,14 @@ elif menu == "Склад материалов":
             ]
         ].copy()
 
-        edited = st.data_editor(
+        edited = data_editor_ru(
             display,
             key="materials_editor",
             use_container_width=True
         )
 
         if st.button(
-            "Save Material Changes"
+            "Сохранить изменения материалов"
         ):
 
             for _, row in edited.iterrows():
@@ -2523,7 +2514,7 @@ elif menu == "Склад материалов":
                 )
 
             st.success(
-                "Saved."
+                "Сохранено."
             )
 
             st.rerun()
@@ -2531,7 +2522,7 @@ elif menu == "Склад материалов":
     else:
 
         st.info(
-            "No materials."
+            "Нет материалов."
         )
 
 
@@ -2542,7 +2533,7 @@ elif menu == "Склад материалов":
     st.markdown("---")
 
     st.subheader(
-        "Material Suppliers"
+        "Поставщики материала"
     )
 
     if not materials.empty:
@@ -2556,7 +2547,7 @@ elif menu == "Склад материалов":
         }
 
         material_label = st.selectbox(
-            "Material",
+            "Материал",
             list(material_map.keys()),
             key="material_supplier_material"
         )
@@ -2623,31 +2614,31 @@ elif menu == "Склад материалов":
             ):
 
                 supplier_name = st.selectbox(
-                    "Supplier",
+                    "Поставщик",
                     list(supplier_map.keys())
                 )
 
                 purchase_price = st.number_input(
-                    "Purchase Price",
+                    "Закупочная цена",
                     min_value=0.0,
                     value=0.0,
                     format="%.2f"
                 )
 
                 supplier_code = st.text_input(
-                    "Supplier Code"
+                    "Код поставщика"
                 )
 
                 conditions = st.text_area(
-                    "Conditions"
+                    "Условия"
                 )
 
                 preferred = st.checkbox(
-                    "Preferred Supplier"
+                    "Предпочтительный поставщик"
                 )
 
                 submit = st.form_submit_button(
-                    "Add Supplier"
+                    "Добавить Поставщик"
                 )
 
                 if submit:
@@ -2701,7 +2692,7 @@ elif menu == "Склад материалов":
                     )
 
                     st.success(
-                        "Supplier linked to material."
+                        "Поставщик привязан к материалу."
                     )
 
                     st.rerun()
@@ -2714,7 +2705,7 @@ elif menu == "Склад материалов":
     st.markdown("---")
 
     st.subheader(
-        "Goods Receipt"
+        "Приход материалов"
     )
 
     if not materials.empty:
@@ -2746,33 +2737,33 @@ elif menu == "Склад материалов":
         ):
 
             receipt_material = st.selectbox(
-                "Material",
+                "Материал",
                 list(material_map.keys())
             )
 
             receipt_supplier = st.selectbox(
-                "Supplier",
+                "Поставщик",
                 [""] + list(
                     supplier_map.keys()
                 )
             )
 
             receipt_quantity = st.number_input(
-                "Quantity",
+                "Количество",
                 min_value=0.0001,
                 value=1.0,
                 format="%.4f"
             )
 
             receipt_price = st.number_input(
-                "Unit Price",
+                "Цена за единицу",
                 min_value=0.0,
                 value=0.0,
                 format="%.2f"
             )
 
             submit = st.form_submit_button(
-                "Post Receipt"
+                "Оформить приход"
             )
 
             if submit:
@@ -2873,7 +2864,7 @@ elif menu == "Склад материалов":
                     )
 
                 st.success(
-                    "Goods receipt posted."
+                    "Приход материалов оформлен."
                 )
 
                 st.rerun()
@@ -2886,7 +2877,7 @@ elif menu == "Склад материалов":
     st.markdown("---")
 
     st.subheader(
-        "Material Issue to Production"
+        "Выдача материалов в производство"
     )
 
     objects = get_objects()
@@ -2914,24 +2905,24 @@ elif menu == "Склад материалов":
         ):
 
             issue_material = st.selectbox(
-                "Material",
+                "Материал",
                 list(material_map.keys())
             )
 
             issue_object = st.selectbox(
-                "Object",
+                "Объект",
                 list(object_map.keys())
             )
 
             issue_quantity = st.number_input(
-                "Quantity",
+                "Количество",
                 min_value=0.0001,
                 value=1.0,
                 format="%.4f"
             )
 
             submit = st.form_submit_button(
-                "Issue to Production"
+                "Выдать в производство"
             )
 
             if submit:
@@ -2967,7 +2958,7 @@ elif menu == "Склад материалов":
 
                     st.error(
                         f"Insufficient stock. "
-                        f"Available: {stock}"
+                        f"Доступно: {stock}"
                     )
 
                 else:
@@ -3015,7 +3006,7 @@ elif menu == "Склад материалов":
                     )
 
                     st.success(
-                        "Material issued to production."
+                        "Материал выдан в производство."
                     )
 
                     st.rerun()
@@ -3028,7 +3019,7 @@ elif menu == "Склад материалов":
     st.markdown("---")
 
     st.subheader(
-        "Material Movement"
+        "Движение материалов"
     )
 
     movements = run_query(
@@ -3089,13 +3080,13 @@ elif menu == "Склад материалов":
 elif menu == "Поставщики":
 
     st.header(
-        "Suppliers"
+        "Поставщики"
     )
 
     suppliers = get_suppliers()
 
     with st.expander(
-        "Create Supplier",
+        "Создать поставщика",
         expanded=False
     ):
 
@@ -3104,11 +3095,11 @@ elif menu == "Поставщики":
         ):
 
             name = st.text_input(
-                "Name"
+                "Название"
             )
 
             supplier_type = st.selectbox(
-                "Type",
+                "Тип поставщика",
                 [
                     "material_supplier",
                     "subcontractor",
@@ -3117,11 +3108,11 @@ elif menu == "Поставщики":
             )
 
             contact_person = st.text_input(
-                "Contact Person"
+                "Контактное лицо"
             )
 
             phone = st.text_input(
-                "Phone"
+                "Телефон"
             )
 
             email = st.text_input(
@@ -3129,19 +3120,19 @@ elif menu == "Поставщики":
             )
 
             category = st.text_input(
-                "Category"
+                "Категория"
             )
 
             conditions = st.text_area(
-                "Conditions"
+                "Условия"
             )
 
             contact_info = st.text_area(
-                "Contact Info"
+                "Контактная информация"
             )
 
             submit = st.form_submit_button(
-                "Create Supplier"
+                "Создать поставщика"
             )
 
             if submit:
@@ -3149,7 +3140,7 @@ elif menu == "Поставщики":
                 if not name.strip():
 
                     st.warning(
-                        "Name is required."
+                        "Необходимо указать название."
                     )
 
                 else:
@@ -3187,7 +3178,7 @@ elif menu == "Поставщики":
                     )
 
                     st.success(
-                        "Supplier created."
+                        "Поставщик создан."
                     )
 
                     st.rerun()
@@ -3208,14 +3199,14 @@ elif menu == "Поставщики":
             ]
         ].copy()
 
-        edited = st.data_editor(
+        edited = data_editor_ru(
             display,
             key="suppliers_editor",
             use_container_width=True
         )
 
         if st.button(
-            "Save Supplier Changes"
+            "Сохранить изменения поставщика"
         ):
 
             for _, row in edited.iterrows():
@@ -3249,7 +3240,7 @@ elif menu == "Поставщики":
                 )
 
             st.success(
-                "Saved."
+                "Сохранено."
             )
 
             st.rerun()
@@ -3258,7 +3249,7 @@ elif menu == "Поставщики":
         st.markdown("---")
 
         st.subheader(
-            "Delete Supplier"
+            "Удалить поставщика"
         )
 
         delete_map = {
@@ -3270,13 +3261,13 @@ elif menu == "Поставщики":
         }
 
         delete_label = st.selectbox(
-            "Supplier",
+            "Поставщик",
             list(delete_map.keys()),
             key="delete_supplier"
         )
 
         if st.button(
-            "Delete Supplier"
+            "Удалить поставщика"
         ):
 
             try:
@@ -3296,7 +3287,7 @@ elif menu == "Поставщики":
                 )
 
                 st.success(
-                    "Supplier deleted."
+                    "Поставщик удалён."
                 )
 
                 st.rerun()
@@ -3304,7 +3295,7 @@ elif menu == "Поставщики":
             except Exception as e:
 
                 st.error(
-                    "Supplier cannot be deleted."
+                    "Поставщика нельзя удалить."
                 )
 
                 st.code(
@@ -3319,7 +3310,7 @@ elif menu == "Поставщики":
 elif menu == "Производство":
 
     st.header(
-        "Production"
+        "Производство"
     )
 
     objects = get_objects()
@@ -3327,14 +3318,14 @@ elif menu == "Производство":
     if objects.empty:
 
         st.info(
-            "No objects."
+            "Нет объектов."
         )
 
     else:
 
         object_filter = st.selectbox(
-            "Object",
-            ["All Objects"]
+            "Объект",
+            ["Все объекты"]
             + [
                 f"{row['id']} — "
                 f"{row['object_name']}"
@@ -3393,7 +3384,7 @@ elif menu == "Производство":
 
         params = []
 
-        if object_filter != "All Objects":
+        if object_filter != "Все объекты":
 
             object_id = int(
                 object_filter.split(
@@ -3424,7 +3415,7 @@ elif menu == "Производство":
         if df.empty:
 
             st.success(
-                "No products waiting for production."
+                "Нет изделий, ожидающих производства."
             )
 
         else:
@@ -3438,7 +3429,7 @@ elif menu == "Производство":
             st.markdown("---")
 
             st.subheader(
-                "Production Action"
+                "Действие производства"
             )
 
             item_map = {
@@ -3452,7 +3443,7 @@ elif menu == "Производство":
             }
 
             selected_item = st.selectbox(
-                "Product",
+                "Изделие",
                 list(item_map.keys())
             )
 
@@ -3465,10 +3456,10 @@ elif menu == "Производство":
             ].iloc[0]
 
             action = st.radio(
-                "Action",
+                "Действие",
                 [
-                    "Start Production",
-                    "Move to Ready"
+                    "Запустить производство",
+                    "Переместить в готовую продукцию"
                 ],
                 horizontal=True
             )
@@ -3479,7 +3470,7 @@ elif menu == "Производство":
                     item_row["qty_new"]
                 )
 
-                if action == "Start Production"
+                if action == "Запустить производство"
 
                 else
 
@@ -3489,7 +3480,7 @@ elif menu == "Производство":
             )
 
             action_qty = st.number_input(
-                "Quantity",
+                "Количество",
                 min_value=1,
                 max_value=(
                     max_qty
@@ -3500,10 +3491,10 @@ elif menu == "Производство":
             )
 
             if st.button(
-                "Apply Production Action"
+                "Выполнить действие производства"
             ):
 
-                if action == "Start Production":
+                if action == "Запустить производство":
 
                     run_query(
                         """
@@ -3655,7 +3646,7 @@ elif menu == "Производство":
                     )
 
                 st.success(
-                    "Production updated."
+                    "Производство обновлено."
                 )
 
                 st.rerun()
@@ -3668,7 +3659,7 @@ elif menu == "Производство":
 elif menu == "Готовая продукция":
 
     st.header(
-        "Finished Goods"
+        "Готовая продукция"
     )
 
     df = run_query(
@@ -3711,7 +3702,7 @@ elif menu == "Готовая продукция":
     if df.empty:
 
         st.info(
-            "No finished products."
+            "Нет готовой продукции."
         )
 
     else:
@@ -3725,7 +3716,7 @@ elif menu == "Готовая продукция":
         st.markdown("---")
 
         st.subheader(
-            "Shipment / Delivery"
+            "Отгрузка / доставка"
         )
 
         fg_map = {
@@ -3744,7 +3735,7 @@ elif menu == "Готовая продукция":
         if fg_map:
 
             selected = st.selectbox(
-                "Finished Product",
+                "Готовое изделие",
                 list(fg_map.keys())
             )
 
@@ -3764,16 +3755,16 @@ elif menu == "Готовая продукция":
 
                 action = "ship"
 
-                label = "Ship"
+                label = "Отгрузить"
 
             else:
 
                 action = "arrive"
 
-                label = "Mark Arrived"
+                label = "Отметить как доставленное"
 
             qty = st.number_input(
-                "Quantity",
+                "Количество",
                 min_value=1,
                 max_value=current_qty,
                 value=1
@@ -3936,7 +3927,7 @@ elif menu == "Готовая продукция":
                 )
 
                 st.success(
-                    "Updated."
+                    "Обновлено."
                 )
 
                 st.rerun()
@@ -3949,7 +3940,7 @@ elif menu == "Готовая продукция":
 elif menu == "Транспорт и логистика":
 
     st.header(
-        "Transport & Logistics"
+        "Транспорт и логистика"
     )
 
     df = run_query(
@@ -4003,7 +3994,7 @@ elif menu == "Транспорт и логистика":
     if df.empty:
 
         st.info(
-            "No logistics data."
+            "Нет данных по логистике."
         )
 
     else:
@@ -4017,7 +4008,7 @@ elif menu == "Транспорт и логистика":
         st.markdown("---")
 
         st.subheader(
-            "Object Shipment Details"
+            "Данные отгрузки объекта"
         )
 
         object_map = {
@@ -4030,7 +4021,7 @@ elif menu == "Транспорт и логистика":
         }
 
         selected = st.selectbox(
-            "Object",
+            "Объект",
             list(object_map.keys())
         )
 
@@ -4085,7 +4076,7 @@ elif menu == "Транспорт и логистика":
 elif menu == "Монтаж":
 
     st.header(
-        "Installation"
+        "Монтаж"
     )
 
     df = run_query(
@@ -4148,7 +4139,7 @@ elif menu == "Монтаж":
     if df.empty:
 
         st.info(
-            "No installation data."
+            "Нет данных по монтажу."
         )
 
     else:
@@ -4162,7 +4153,7 @@ elif menu == "Монтаж":
         st.markdown("---")
 
         st.subheader(
-            "Installation Action"
+            "Действие монтажа"
         )
 
         object_map = {
@@ -4175,7 +4166,7 @@ elif menu == "Монтаж":
         }
 
         selected = st.selectbox(
-            "Object",
+            "Объект",
             list(object_map.keys())
         )
 
@@ -4199,7 +4190,7 @@ elif menu == "Монтаж":
             }
 
             item_label = st.selectbox(
-                "Product",
+                "Изделие",
                 list(item_map.keys())
             )
 
@@ -4212,30 +4203,30 @@ elif menu == "Монтаж":
             ].iloc[0]
 
             st.write(
-                f"Arrived: "
+                f"Доставлено: "
                 f"{safe_int(item_row['qty_arrived'])}"
             )
 
             st.write(
-                f"Installing: "
+                f"В монтаже: "
                 f"{safe_int(item_row['qty_installing'])}"
             )
 
             st.write(
-                f"Installed: "
+                f"Смонтировано: "
                 f"{safe_int(item_row['qty_installed'])}"
             )
 
             action = st.radio(
-                "Action",
+                "Действие",
                 [
-                    "Start Installation",
-                    "Complete Installation"
+                    "Начать монтаж",
+                    "Завершить монтаж"
                 ],
                 horizontal=True
             )
 
-            if action == "Start Installation":
+            if action == "Начать монтаж":
 
                 available = safe_int(
                     item_row["qty_arrived"]
@@ -4248,7 +4239,7 @@ elif menu == "Монтаж":
                 )
 
             qty = st.number_input(
-                "Quantity",
+                "Количество",
                 min_value=1,
                 max_value=(
                     available
@@ -4259,10 +4250,10 @@ elif menu == "Монтаж":
             )
 
             if st.button(
-                "Apply Installation Action"
+                "Выполнить действие монтажа"
             ):
 
-                if action == "Start Installation":
+                if action == "Начать монтаж":
 
                     run_query(
                         """
@@ -4357,7 +4348,7 @@ elif menu == "Монтаж":
                     )
 
                 st.success(
-                    "Installation updated."
+                    "Монтаж обновлён."
                 )
 
                 st.rerun()
@@ -4370,7 +4361,7 @@ elif menu == "Монтаж":
 elif menu == "Зарплата":
 
     st.header(
-        "Payroll"
+        "Зарплата"
     )
 
     df = run_query(
@@ -4413,7 +4404,7 @@ elif menu == "Зарплата":
     if df.empty:
 
         st.info(
-            "No payroll records."
+            "Нет записей по зарплате."
         )
 
     else:
@@ -4432,7 +4423,7 @@ elif menu == "Зарплата":
 elif menu == "Отчёты":
 
     st.header(
-        "Reports"
+        "Отчёты"
     )
 
 
@@ -4476,22 +4467,22 @@ elif menu == "Отчёты":
     c1, c2, c3, c4 = st.columns(4)
 
     c1.metric(
-        "Clients",
+        "Клиенты",
         clients_count
     )
 
     c2.metric(
-        "Objects",
+        "Объекты",
         objects_count
     )
 
     c3.metric(
-        "Products",
+        "Изделия",
         products_count
     )
 
     c4.metric(
-        "Materials",
+        "Материалы",
         materials_count
     )
 
@@ -4504,7 +4495,7 @@ elif menu == "Отчёты":
     # ========================================================
 
     st.subheader(
-        "Production by Object"
+        "Производство по объектам"
     )
 
     production_report = run_query(
@@ -4583,7 +4574,7 @@ elif menu == "Отчёты":
     st.markdown("---")
 
     st.subheader(
-        "Warehouse Stock"
+        "Остатки на складе"
     )
 
     stock_report = run_query(
