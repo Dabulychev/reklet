@@ -2469,238 +2469,549 @@ elif menu == "Product Templates":
 
 elif menu == "Materials Warehouse":
 
-    st.header(
-        "Materials Warehouse"
+    st.header("Materials Warehouse")
+
+    sub = st.radio(
+        "Materials Warehouse",
+        [
+            "Materials List",
+            "Приходная накладная",
+            "Расходная накладная"
+        ],
+        horizontal=True,
+        label_visibility="collapsed"
     )
 
-    materials = get_materials()
-
+    st.markdown("---")
 
     # ========================================================
-    # CREATE MATERIAL
+    # MATERIALS LIST
     # ========================================================
 
-    with st.expander(
-        "Create Material",
-        expanded=False
-    ):
+    if sub == "Materials List":
 
+        materials = get_materials()
+
+        # ----------------------------------------------------
+        # CREATE MATERIAL
+        # ----------------------------------------------------
+
+        with st.expander("Create Material", expanded=False):
+
+            suppliers = get_suppliers()
+
+            units = run_query(
+                """
+                SELECT id, name
+                FROM reklet.units
+                ORDER BY name
+                """,
+                fetch=True
+            )
+
+            unit_map = {}
+            if not units.empty:
+                unit_map = {
+                    row["name"]: int(row["id"])
+                    for _, row in units.iterrows()
+                }
+
+            with st.form("create_material"):
+
+                material_name = st.text_input("Material Name")
+
+                if unit_map:
+                    unit_name = st.selectbox("Unit", list(unit_map.keys()))
+                else:
+                    unit_name = None
+                    st.warning("Create units first.")
+
+                cost = st.number_input(
+                    "Default Cost",
+                    min_value=0.0,
+                    value=0.0,
+                    format="%.2f"
+                )
+
+                stock = st.number_input(
+                    "Opening Stock",
+                    min_value=0.0,
+                    value=0.0,
+                    format="%.4f"
+                )
+
+                waste = st.number_input(
+                    "Default Waste Coefficient",
+                    min_value=0.0,
+                    value=1.20,
+                    format="%.2f"
+                )
+
+                submit = st.form_submit_button("Create Material")
+
+                if submit:
+                    if not material_name.strip():
+                        st.warning("Material name is required.")
+                    elif not unit_map:
+                        st.warning("Create at least one unit.")
+                    else:
+                        run_query(
+                            """
+                            INSERT INTO reklet.materials
+                            (
+                                name,
+                                unit_id,
+                                cost_per_unit,
+                                stock_quantity,
+                                default_waste_coefficient
+                            )
+                            VALUES (%s,%s,%s,%s,%s)
+                            """,
+                            (
+                                material_name,
+                                unit_map[unit_name],
+                                cost,
+                                stock,
+                                waste
+                            )
+                        )
+                        st.success("Material created.")
+                        st.rerun()
+
+        # ----------------------------------------------------
+        # MATERIAL LIST / EDIT
+        # ----------------------------------------------------
+
+        if not materials.empty:
+
+            st.subheader("Materials")
+
+            display = materials[
+                [
+                    "id",
+                    "name",
+                    "unit_name",
+                    "cost_per_unit",
+                    "stock_quantity",
+                    "default_waste_coefficient"
+                ]
+            ].copy()
+
+            edited = st.data_editor(
+                display,
+                key="materials_editor",
+                use_container_width=True
+            )
+
+            if st.button("Save Material Changes", key="save_materials"):
+
+                for _, row in edited.iterrows():
+                    run_query(
+                        """
+                        UPDATE reklet.materials
+                        SET
+                            name = %s,
+                            cost_per_unit = %s,
+                            stock_quantity = %s,
+                            default_waste_coefficient = %s
+                        WHERE id = %s
+                        """,
+                        (
+                            row["name"],
+                            safe_float(row["cost_per_unit"]),
+                            safe_float(row["stock_quantity"]),
+                            safe_float(
+                                row["default_waste_coefficient"],
+                                1.20
+                            ),
+                            safe_int(row["id"])
+                        )
+                    )
+
+                st.success("Saved.")
+                st.rerun()
+
+        else:
+            st.info("No materials.")
+
+        # ----------------------------------------------------
+        # SUPPLIERS PER MATERIAL
+        # ----------------------------------------------------
+
+        st.markdown("---")
+        st.subheader("Material Suppliers")
+
+        if not materials.empty:
+
+            material_map = {
+                row["name"]: int(row["id"])
+                for _, row in materials.iterrows()
+            }
+
+            material_label = st.selectbox(
+                "Material",
+                list(material_map.keys()),
+                key="material_supplier_material"
+            )
+
+            material_id = material_map[material_label]
+
+            supplier_data = run_query(
+                """
+                SELECT
+                    ms.id,
+                    s.name AS supplier,
+                    ms.purchase_price,
+                    ms.supplier_code,
+                    ms.conditions,
+                    ms.is_preferred
+                FROM reklet.material_suppliers ms
+                JOIN reklet.suppliers s
+                    ON s.id = ms.supplier_id
+                WHERE ms.material_id = %s
+                ORDER BY s.name
+                """,
+                (material_id,),
+                fetch=True
+            )
+
+            if not supplier_data.empty:
+                st.dataframe(
+                    supplier_data,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            suppliers = get_suppliers()
+
+            if not suppliers.empty:
+                supplier_map = {
+                    row["name"]: int(row["id"])
+                    for _, row in suppliers.iterrows()
+                }
+
+                with st.form(f"add_supplier_material_{material_id}"):
+
+                    supplier_name = st.selectbox(
+                        "Supplier",
+                        list(supplier_map.keys())
+                    )
+
+                    purchase_price = st.number_input(
+                        "Purchase Price",
+                        min_value=0.0,
+                        value=0.0,
+                        format="%.2f"
+                    )
+
+                    supplier_code = st.text_input("Supplier Code")
+                    conditions = st.text_area("Conditions")
+                    preferred = st.checkbox("Preferred Supplier")
+
+                    submit = st.form_submit_button("Add Supplier")
+
+                    if submit:
+                        run_query(
+                            """
+                            INSERT INTO reklet.material_suppliers
+                            (
+                                material_id,
+                                supplier_id,
+                                purchase_price,
+                                supplier_code,
+                                conditions,
+                                is_preferred
+                            )
+                            VALUES (%s,%s,%s,%s,%s,%s)
+                            ON CONFLICT (material_id, supplier_id)
+                            DO UPDATE SET
+                                purchase_price = EXCLUDED.purchase_price,
+                                supplier_code = EXCLUDED.supplier_code,
+                                conditions = EXCLUDED.conditions,
+                                is_preferred = EXCLUDED.is_preferred
+                            """,
+                            (
+                                material_id,
+                                supplier_map[supplier_name],
+                                purchase_price,
+                                supplier_code,
+                                conditions,
+                                preferred
+                            )
+                        )
+                        st.success("Supplier linked to material.")
+                        st.rerun()
+
+    # ========================================================
+    # GOODS RECEIPT
+    # ========================================================
+
+    elif sub == "Приходная накладная":
+
+        st.subheader("Приходная накладная")
+        st.caption("Поступление материалов от поставщиков")
+
+        materials = get_materials()
         suppliers = get_suppliers()
 
-        units = run_query(
+        if not materials.empty:
+
+            material_map = {
+                row["name"]: int(row["id"])
+                for _, row in materials.iterrows()
+            }
+
+            supplier_map = {}
+            if not suppliers.empty:
+                supplier_map = {
+                    row["name"]: int(row["id"])
+                    for _, row in suppliers.iterrows()
+                }
+
+            with st.form("goods_receipt"):
+
+                receipt_material = st.selectbox(
+                    "Material",
+                    list(material_map.keys())
+                )
+
+                receipt_supplier = st.selectbox(
+                    "Supplier",
+                    [""] + list(supplier_map.keys())
+                )
+
+                receipt_quantity = st.number_input(
+                    "Quantity",
+                    min_value=0.0001,
+                    value=1.0,
+                    format="%.4f"
+                )
+
+                receipt_price = st.number_input(
+                    "Unit Price",
+                    min_value=0.0,
+                    value=0.0,
+                    format="%.2f"
+                )
+
+                submit = st.form_submit_button("Post Receipt")
+
+                if submit:
+
+                    material_id = material_map[receipt_material]
+
+                    supplier_id = (
+                        supplier_map[receipt_supplier]
+                        if receipt_supplier
+                        else None
+                    )
+
+                    run_query(
+                        """
+                        INSERT INTO reklet.material_transactions
+                        (
+                            material_id,
+                            supplier_id,
+                            operation_type,
+                            quantity,
+                            unit_price,
+                            transaction_type
+                        )
+                        VALUES
+                        (%s,%s,'purchase',%s,%s,'IN')
+                        """,
+                        (
+                            material_id,
+                            supplier_id,
+                            receipt_quantity,
+                            receipt_price
+                        )
+                    )
+
+                    run_query(
+                        """
+                        UPDATE reklet.materials
+                        SET stock_quantity =
+                            COALESCE(stock_quantity, 0) + %s
+                        WHERE id = %s
+                        """,
+                        (receipt_quantity, material_id)
+                    )
+
+                    if supplier_id:
+                        run_query(
+                            """
+                            INSERT INTO reklet.material_suppliers
+                            (
+                                material_id,
+                                supplier_id,
+                                purchase_price
+                            )
+                            VALUES (%s,%s,%s)
+                            ON CONFLICT (material_id, supplier_id)
+                            DO UPDATE SET
+                                purchase_price = EXCLUDED.purchase_price
+                            """,
+                            (
+                                material_id,
+                                supplier_id,
+                                receipt_price
+                            )
+                        )
+
+                    st.success("Goods receipt posted.")
+                    st.rerun()
+
+        else:
+            st.info("Create materials first in Materials List.")
+
+    # ========================================================
+    # MATERIAL ISSUE
+    # ========================================================
+
+    elif sub == "Расходная накладная":
+
+        st.subheader("Расходная накладная")
+        st.caption("Списание материалов в производство")
+
+        materials = get_materials()
+        objects = get_objects()
+
+        if not materials.empty and not objects.empty:
+
+            material_map = {
+                row["name"]: int(row["id"])
+                for _, row in materials.iterrows()
+            }
+
+            object_map = {
+                f"{row['id']} — {row['object_name']}": int(row["id"])
+                for _, row in objects.iterrows()
+            }
+
+            with st.form("material_issue"):
+
+                issue_material = st.selectbox(
+                    "Material",
+                    list(material_map.keys())
+                )
+
+                issue_object = st.selectbox(
+                    "Object",
+                    list(object_map.keys())
+                )
+
+                issue_quantity = st.number_input(
+                    "Quantity",
+                    min_value=0.0001,
+                    value=1.0,
+                    format="%.4f"
+                )
+
+                submit = st.form_submit_button("Issue to Production")
+
+                if submit:
+
+                    material_id = material_map[issue_material]
+                    object_id = object_map[issue_object]
+
+                    current_stock = run_query(
+                        """
+                        SELECT stock_quantity
+                        FROM reklet.materials
+                        WHERE id = %s
+                        """,
+                        (material_id,),
+                        fetch=True
+                    )
+
+                    stock = safe_float(
+                        current_stock.iloc[0]["stock_quantity"]
+                    )
+
+                    if issue_quantity > stock:
+                        st.error(
+                            f"Insufficient stock. Available: {stock}"
+                        )
+                    else:
+                        run_query(
+                            """
+                            INSERT INTO reklet.material_transactions
+                            (
+                                material_id,
+                                object_id,
+                                operation_type,
+                                quantity,
+                                transaction_type
+                            )
+                            VALUES
+                            (%s,%s,'production_transfer',%s,'OUT')
+                            """,
+                            (
+                                material_id,
+                                object_id,
+                                issue_quantity
+                            )
+                        )
+
+                        run_query(
+                            """
+                            UPDATE reklet.materials
+                            SET stock_quantity = stock_quantity - %s
+                            WHERE id = %s
+                            """,
+                            (issue_quantity, material_id)
+                        )
+
+                        st.success("Material issued to production.")
+                        st.rerun()
+
+        elif materials.empty:
+            st.info("Create materials first in Materials List.")
+        else:
+            st.info("Create objects first in Objects.")
+
+        # ----------------------------------------------------
+        # MOVEMENT HISTORY
+        # ----------------------------------------------------
+
+        st.markdown("---")
+        st.subheader("Material Movement")
+
+        movements = run_query(
             """
             SELECT
-                id,
-                name
-
-            FROM reklet.units
-
-            ORDER BY name
+                mt.id,
+                mt.created_at,
+                m.name AS material,
+                s.name AS supplier,
+                o.object_name AS object_name,
+                mt.operation_type,
+                mt.quantity,
+                mt.unit_price,
+                mt.transaction_type
+            FROM reklet.material_transactions mt
+            LEFT JOIN reklet.materials m
+                ON m.id = mt.material_id
+            LEFT JOIN reklet.suppliers s
+                ON s.id = mt.supplier_id
+            LEFT JOIN reklet.objects o
+                ON o.id = mt.object_id
+            ORDER BY mt.created_at DESC
+            LIMIT 500
             """,
             fetch=True
         )
 
-        supplier_map = {}
-
-        if not suppliers.empty:
-
-            supplier_map = {
-
-                row["name"]:
-                    int(row["id"])
-
-                for _, row in suppliers.iterrows()
-            }
-
-        unit_map = {}
-
-        if not units.empty:
-
-            unit_map = {
-
-                row["name"]:
-                    int(row["id"])
-
-                for _, row in units.iterrows()
-            }
-
-        with st.form(
-            "create_material"
-        ):
-
-            material_name = st.text_input(
-                "Material Name"
+        if not movements.empty:
+            st.dataframe(
+                movements,
+                use_container_width=True,
+                hide_index=True
             )
 
-            if unit_map:
 
-                unit_name = st.selectbox(
-                    "Unit",
-                    list(unit_map.keys())
-                )
-
-            else:
-
-                unit_name = None
-
-                st.warning(
-                    "Create units first."
-                )
-
-            cost = st.number_input(
-                "Default Cost",
-                min_value=0.0,
-                value=0.0,
-                format="%.2f"
-            )
-
-            stock = st.number_input(
-                "Opening Stock",
-                min_value=0.0,
-                value=0.0,
-                format="%.4f"
-            )
-
-            waste = st.number_input(
-                "Default Waste Coefficient",
-                min_value=0.0,
-                value=1.20,
-                format="%.2f"
-            )
-
-            submit = st.form_submit_button(
-                "Create Material"
-            )
-
-            if submit:
-
-                if not material_name.strip():
-
-                    st.warning(
-                        "Material name is required."
-                    )
-
-                elif not unit_map:
-
-                    st.warning(
-                        "Create at least one unit."
-                    )
-
-                else:
-
-                    run_query(
-                        """
-                        INSERT INTO reklet.materials
-                        (
-                            name,
-                            unit_id,
-                            cost_per_unit,
-                            stock_quantity,
-                            default_waste_coefficient
-                        )
-
-                        VALUES (%s,%s,%s,%s,%s)
-                        """,
-                        (
-                            material_name,
-                            unit_map[unit_name],
-                            cost,
-                            stock,
-                            waste
-                        )
-                    )
-
-                    st.success(
-                        "Material created."
-                    )
-
-                    st.rerun()
-
-
-    # ========================================================
-    # MATERIAL LIST
-    # ========================================================
-
-    if not materials.empty:
-
-        st.subheader(
-            "Materials"
-        )
-
-        display = materials[
-            [
-                "id",
-                "name",
-                "unit_name",
-                "cost_per_unit",
-                "stock_quantity",
-                "default_waste_coefficient"
-            ]
-        ].copy()
-
-        edited = st.data_editor(
-            display,
-            key="materials_editor",
-            use_container_width=True
-        )
-
-        if st.button(
-            "Save Material Changes"
-        ):
-
-            for _, row in edited.iterrows():
-
-                run_query(
-                    """
-                    UPDATE reklet.materials
-
-                    SET
-
-                        name = %s,
-
-                        cost_per_unit = %s,
-
-                        stock_quantity = %s,
-
-                        default_waste_coefficient = %s
-
-                    WHERE id = %s
-                    """,
-                    (
-                        row["name"],
-                        safe_float(
-                            row["cost_per_unit"]
-                        ),
-                        safe_float(
-                            row["stock_quantity"]
-                        ),
-                        safe_float(
-                            row[
-                                "default_waste_coefficient"
-                            ],
-                            1.20
-                        ),
-                        safe_int(
-                            row["id"]
-                        )
-                    )
-                )
-
-            st.success(
-                "Saved."
-            )
-
-            st.rerun()
-
-    else:
-
-        st.info(
-            "No materials."
-        )
-
-
-    # ========================================================
-    # SUPPLIERS PER MATERIAL
+# SUPPLIERS PER MATERIAL
     # ========================================================
 
     st.markdown("---")
