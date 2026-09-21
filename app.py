@@ -3913,279 +3913,408 @@ elif menu == "Production":
 
 elif menu == "Finished Goods":
 
-    st.header(
-        "Finished Goods"
-    )
+    st.header("Finished Goods")
 
-    df = run_query(
+    # Finished goods are created in batches after each production action.
+    # The warehouse view therefore aggregates those batches so the user can
+    # see the real total ready quantity, while shipment remains tied to the
+    # exact object item (object + product) to prevent mixing identical
+    # products belonging to different objects.
+
+    summary_df = run_query(
         """
         SELECT
-
-            fg.id,
-
+            oi.id AS object_item_id,
+            o.id AS object_id,
             o.object_name,
-
             c.name AS client_name,
-
             oi.item_name,
-
-            fg.quantity,
-
-            fg.status,
-
-            fg.created_at
-
-        FROM
-            reklet.finished_goods fg
-
-        JOIN reklet.object_items oi
-            ON oi.id = fg.object_item_id
-
-        LEFT JOIN reklet.objects o
-            ON o.id = fg.object_id
-
+            oi.quantity_needed,
+            oi.qty_ready,
+            oi.qty_shipped,
+            oi.qty_arrived,
+            COALESCE(SUM(
+                CASE
+                    WHEN fg.status = 'ready' THEN fg.quantity
+                    ELSE 0
+                END
+            ), 0) AS ready_stock
+        FROM reklet.object_items oi
+        JOIN reklet.objects o
+            ON o.id = oi.object_id
         LEFT JOIN reklet.clients c
             ON c.id = o.client_id
-
+        LEFT JOIN reklet.finished_goods fg
+            ON fg.object_item_id = oi.id
+        GROUP BY
+            oi.id,
+            o.id,
+            o.object_name,
+            c.name,
+            oi.item_name,
+            oi.quantity_needed,
+            oi.qty_ready,
+            oi.qty_shipped,
+            oi.qty_arrived
         ORDER BY
             o.object_name,
-            fg.created_at
+            oi.item_name
         """,
         fetch=True
     )
 
-    if df.empty:
-
-        st.info(
-            "No finished products."
-        )
-
+    if summary_df.empty:
+        st.info("No finished products.")
     else:
+        st.subheader("Ready Products by Object")
+
+        display_df = summary_df[
+            [
+                "object_name",
+                "client_name",
+                "item_name",
+                "quantity_needed",
+                "ready_stock",
+                "qty_shipped",
+                "qty_arrived"
+            ]
+        ].rename(columns={
+            "object_name": "Object",
+            "client_name": "Client",
+            "item_name": "Product",
+            "quantity_needed": "Required",
+            "ready_stock": "Ready to Ship",
+            "qty_shipped": "Shipped",
+            "qty_arrived": "Arrived"
+        })
 
         st.dataframe(
-            df,
+            display_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.caption(
+            "Ready to Ship is aggregated across all production batches, "
+            "but remains separated by Object + Product."
+        )
+
+        st.markdown("---")
+        st.subheader("Total Ready by Product")
+
+        product_summary = (
+            summary_df
+            .groupby("item_name", as_index=False)["ready_stock"]
+            .sum()
+            .rename(columns={
+                "item_name": "Product",
+                "ready_stock": "Total Ready"
+            })
+        )
+
+        st.dataframe(
+            product_summary,
             use_container_width=True,
             hide_index=True
         )
 
         st.markdown("---")
-
-        st.subheader(
-            "Shipment / Delivery"
+        st.subheader("Shipment / Delivery")
+        st.caption(
+            "First select the exact Object and Product. "
+            "Only ready quantity belonging to that object can be shipped."
         )
 
-        fg_map = {
+        ship_df = summary_df[
+            summary_df["ready_stock"] > 0
+        ].copy()
 
-            f"{row['id']} — "
-            f"{row['object_name']} — "
-            f"{row['item_name']} — "
-            f"{row['status']}":
-                int(row["id"])
-
-            for _, row in df.iterrows()
-
-            if row["status"] != "arrived"
-        }
-
-        if fg_map:
+        if ship_df.empty:
+            st.info("There are no finished products ready for shipment.")
+        else:
+            item_map = {
+                f"{int(row['object_item_id'])} — "
+                f"{row['object_name']} — "
+                f"{row['item_name']} — "
+                f"Ready: {int(row['ready_stock'])}":
+                    int(row["object_item_id"])
+                for _, row in ship_df.iterrows()
+            }
 
             selected = st.selectbox(
-                "Finished Product",
-                list(fg_map.keys())
+                "Object / Product",
+                list(item_map.keys())
             )
 
-            fg_id = fg_map[
-                selected
-            ]
-
-            fg_row = df[
-                df["id"] == fg_id
+            object_item_id = item_map[selected]
+            selected_row = ship_df[
+                ship_df["object_item_id"] == object_item_id
             ].iloc[0]
 
-            current_qty = safe_int(
-                fg_row["quantity"]
-            )
+            ready_qty = int(selected_row["ready_stock"])
 
-            if fg_row["status"] == "ready":
-
-                action = "ship"
-
-                label = "Ship"
-
-            else:
-
-                action = "arrive"
-
-                label = "Mark Arrived"
-
-            qty = st.number_input(
+            shipment_qty = st.number_input(
                 "Quantity",
                 min_value=1,
-                max_value=current_qty,
-                value=1
+                max_value=ready_qty,
+                value=1,
+                step=1,
+                key="finished_goods_shipment_qty"
             )
 
-            if st.button(label):
+            if st.button("Ship", key="ship_finished_goods"):
+                remaining = int(shipment_qty)
 
-                if action == "ship":
-
-                    run_query(
-                        """
-                        UPDATE
-                            reklet.finished_goods
-
-                        SET
-
-                            quantity =
-                                quantity - %s,
-
-                            status =
-
-                                CASE
-
-                                    WHEN
-                                        quantity - %s <= 0
-
-                                    THEN 'shipped'
-
-                                    ELSE 'ready'
-
-                                END
-
-                        WHERE id = %s
-                        """,
-                        (
-                            qty,
-                            qty,
-                            fg_id
-                        )
-                    )
-
-                    run_query(
-                        """
-                        UPDATE
-                            reklet.object_items oi
-
-                        SET
-                            qty_shipped =
-                                qty_shipped + %s
-
-                        FROM
-                            reklet.finished_goods fg
-
-                        WHERE
-
-                            fg.id = %s
-
-                            AND oi.id =
-                                fg.object_item_id
-                        """,
-                        (
-                            qty,
-                            fg_id
-                        )
-                    )
-
-                else:
-
-                    run_query(
-                        """
-                        UPDATE
-                            reklet.finished_goods
-
-                        SET
-
-                            quantity =
-                                quantity - %s,
-
-                            status =
-
-                                CASE
-
-                                    WHEN
-                                        quantity - %s <= 0
-
-                                    THEN 'arrived'
-
-                                    ELSE 'shipped'
-
-                                END
-
-                        WHERE id = %s
-                        """,
-                        (
-                            qty,
-                            qty,
-                            fg_id
-                        )
-                    )
-
-                    run_query(
-                        """
-                        UPDATE
-                            reklet.object_items oi
-
-                        SET
-                            qty_arrived =
-                                qty_arrived + %s
-
-                        FROM
-                            reklet.finished_goods fg
-
-                        WHERE
-
-                            fg.id = %s
-
-                            AND oi.id =
-                                fg.object_item_id
-                        """,
-                        (
-                            qty,
-                            fg_id
-                        )
-                    )
-
-                run_query(
+                # Consume the oldest ready batches first. This lets the user
+                # ship e.g. 25 units even if production happened over several
+                # days, while never crossing into another object's stock.
+                batches = run_query(
                     """
-                    INSERT INTO
-                        reklet.finished_goods_transactions
-                    (
-                        finished_goods_id,
-                        object_item_id,
-                        object_id,
-                        operation_type,
-                        quantity
-                    )
-
-                    SELECT
-
-                        fg.id,
-
-                        fg.object_item_id,
-
-                        fg.object_id,
-
-                        %s,
-
-                        %s
-
-                    FROM
-                        reklet.finished_goods fg
-
-                    WHERE fg.id = %s
+                    SELECT id, quantity
+                    FROM reklet.finished_goods
+                    WHERE object_item_id = %s
+                      AND status = 'ready'
+                      AND quantity > 0
+                    ORDER BY created_at, id
+                    FOR UPDATE
                     """,
-                    (
-                        action,
-                        qty,
-                        fg_id
+                    (object_item_id,),
+                    fetch=True
+                )
+
+                available = int(batches["quantity"].sum()) if not batches.empty else 0
+
+                if available < remaining:
+                    st.error(
+                        f"Only {available} units are ready for this Object/Product. "
+                        f"Nothing was shipped."
                     )
+                else:
+                    shipped_total = 0
+
+                    for _, batch in batches.iterrows():
+                        if remaining <= 0:
+                            break
+
+                        batch_id = int(batch["id"])
+                        batch_qty = int(batch["quantity"])
+                        take = min(remaining, batch_qty)
+
+                        new_qty = batch_qty - take
+                        new_status = "shipped" if new_qty == 0 else "ready"
+
+                        run_query(
+                            """
+                            UPDATE reklet.finished_goods
+                            SET quantity = %s,
+                                status = %s
+                            WHERE id = %s
+                            """,
+                            (new_qty, new_status, batch_id)
+                        )
+
+                        run_query(
+                            """
+                            INSERT INTO reklet.finished_goods_transactions
+                            (
+                                finished_goods_id,
+                                object_item_id,
+                                object_id,
+                                operation_type,
+                                quantity
+                            )
+                            SELECT
+                                fg.id,
+                                fg.object_item_id,
+                                fg.object_id,
+                                'ship',
+                                %s
+                            FROM reklet.finished_goods fg
+                            WHERE fg.id = %s
+                            """,
+                            (take, batch_id)
+                        )
+
+                        shipped_total += take
+                        remaining -= take
+
+                    run_query(
+                        """
+                        UPDATE reklet.object_items
+                        SET qty_shipped = qty_shipped + %s
+                        WHERE id = %s
+                        """,
+                        (shipped_total, object_item_id)
+                    )
+
+                    st.success(
+                        f"Shipped {shipped_total} units of "
+                        f"{selected_row['item_name']} for "
+                        f"{selected_row['object_name']}."
+                    )
+                    st.rerun()
+
+        st.markdown("---")
+        st.subheader("Delivery / Arrival")
+
+        shipped_df = run_query(
+            """
+            SELECT
+                oi.id AS object_item_id,
+                o.object_name,
+                c.name AS client_name,
+                oi.item_name,
+                COALESCE(SUM(
+                    CASE
+                        WHEN fg.status = 'shipped' THEN fg.quantity
+                        ELSE 0
+                    END
+                ), 0) AS shipped_stock
+            FROM reklet.object_items oi
+            JOIN reklet.objects o
+                ON o.id = oi.object_id
+            LEFT JOIN reklet.clients c
+                ON c.id = o.client_id
+            LEFT JOIN reklet.finished_goods fg
+                ON fg.object_item_id = oi.id
+            GROUP BY
+                oi.id,
+                o.object_name,
+                c.name,
+                oi.item_name
+            HAVING COALESCE(SUM(
+                CASE
+                    WHEN fg.status = 'shipped' THEN fg.quantity
+                    ELSE 0
+                END
+            ), 0) > 0
+            ORDER BY
+                o.object_name,
+                oi.item_name
+            """,
+            fetch=True
+        )
+
+        if shipped_df.empty:
+            st.info("No shipped products are waiting for arrival.")
+        else:
+            arrival_map = {
+                f"{int(row['object_item_id'])} — "
+                f"{row['object_name']} — "
+                f"{row['item_name']} — "
+                f"Shipped: {int(row['shipped_stock'])}":
+                    int(row["object_item_id"])
+                for _, row in shipped_df.iterrows()
+            }
+
+            selected_arrival = st.selectbox(
+                "Object / Product",
+                list(arrival_map.keys()),
+                key="finished_goods_arrival_select"
+            )
+
+            arrival_item_id = arrival_map[selected_arrival]
+            arrival_row = shipped_df[
+                shipped_df["object_item_id"] == arrival_item_id
+            ].iloc[0]
+            shipped_qty = int(arrival_row["shipped_stock"])
+
+            arrival_qty = st.number_input(
+                "Quantity",
+                min_value=1,
+                max_value=shipped_qty,
+                value=1,
+                step=1,
+                key="finished_goods_arrival_qty"
+            )
+
+            if st.button("Mark Arrived", key="mark_finished_goods_arrived"):
+                remaining = int(arrival_qty)
+
+                batches = run_query(
+                    """
+                    SELECT id, quantity
+                    FROM reklet.finished_goods
+                    WHERE object_item_id = %s
+                      AND status = 'shipped'
+                      AND quantity > 0
+                    ORDER BY created_at, id
+                    FOR UPDATE
+                    """,
+                    (arrival_item_id,),
+                    fetch=True
                 )
 
-                st.success(
-                    "Updated."
-                )
+                available = int(batches["quantity"].sum()) if not batches.empty else 0
 
-                st.rerun()
+                if available < remaining:
+                    st.error(
+                        f"Only {available} shipped units are available for this Object/Product. "
+                        f"Nothing was marked as arrived."
+                    )
+                else:
+                    arrived_total = 0
+
+                    for _, batch in batches.iterrows():
+                        if remaining <= 0:
+                            break
+
+                        batch_id = int(batch["id"])
+                        batch_qty = int(batch["quantity"])
+                        take = min(remaining, batch_qty)
+                        new_qty = batch_qty - take
+                        new_status = "arrived" if new_qty == 0 else "shipped"
+
+                        run_query(
+                            """
+                            UPDATE reklet.finished_goods
+                            SET quantity = %s,
+                                status = %s
+                            WHERE id = %s
+                            """,
+                            (new_qty, new_status, batch_id)
+                        )
+
+                        run_query(
+                            """
+                            INSERT INTO reklet.finished_goods_transactions
+                            (
+                                finished_goods_id,
+                                object_item_id,
+                                object_id,
+                                operation_type,
+                                quantity
+                            )
+                            SELECT
+                                fg.id,
+                                fg.object_item_id,
+                                fg.object_id,
+                                'arrive',
+                                %s
+                            FROM reklet.finished_goods fg
+                            WHERE fg.id = %s
+                            """,
+                            (take, batch_id)
+                        )
+
+                        arrived_total += take
+                        remaining -= take
+
+                    run_query(
+                        """
+                        UPDATE reklet.object_items
+                        SET qty_arrived = qty_arrived + %s
+                        WHERE id = %s
+                        """,
+                        (arrived_total, arrival_item_id)
+                    )
+
+                    st.success(
+                        f"{arrived_total} units marked as arrived for "
+                        f"{arrival_row['object_name']} / "
+                        f"{arrival_row['item_name']}."
+                    )
+                    st.rerun()
 
 
 # ============================================================
