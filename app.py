@@ -4904,8 +4904,17 @@ elif menu == "Отчёты":
         oi.item_name,
         COALESCE(oi.quantity_needed, 0) AS quantity_needed,
         COALESCE(oi.qty_installed, 0) AS qty_installed,
-        COALESCE(oi.qty_arrived, 0) AS qty_arrived,
-        COALESCE(oi.qty_shipped, 0) AS qty_shipped,
+        (
+            COALESCE(oi.qty_arrived, 0)
+            + COALESCE(oi.qty_installing, 0)
+            + COALESCE(oi.qty_installed, 0)
+        ) AS qty_arrived,
+        (
+            COALESCE(oi.qty_shipped, 0)
+            + COALESCE(oi.qty_arrived, 0)
+            + COALESCE(oi.qty_installing, 0)
+            + COALESCE(oi.qty_installed, 0)
+        ) AS qty_shipped,
         COALESCE(oi.qty_ready, 0) AS qty_ready,
         COALESCE(SUM(
             ptm.quantity_per_unit
@@ -4922,7 +4931,7 @@ elif menu == "Отчёты":
         o.id, o.object_name, c.name, o.address,
         o.transport_distance_km,
         oi.id, oi.item_name, oi.quantity_needed,
-        oi.qty_installed, oi.qty_arrived, oi.qty_shipped, oi.qty_ready
+        oi.qty_installed, oi.qty_arrived, oi.qty_installing, oi.qty_shipped, oi.qty_ready
     ORDER BY o.object_name, oi.item_name
     """
 
