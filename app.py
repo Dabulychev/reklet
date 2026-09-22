@@ -5299,41 +5299,6 @@ elif menu == "Отчёты":
 
 
 
-    archive_query = """
-        SELECT
-            o.object_name,
-            c.name AS client_name,
-            oi.item_name,
-            oi.qty_installed AS quantity
-        FROM reklet.object_items oi
-        JOIN reklet.objects o ON o.id = oi.object_id
-        LEFT JOIN reklet.clients c ON c.id = o.client_id
-        WHERE COALESCE(oi.qty_installed, 0) >= COALESCE(oi.quantity_needed, 0)
-      AND COALESCE(oi.quantity_needed, 0) > 0
-    """
-    archive_params = []
-
-    if archive_object_filter != "Все объекты":
-        archive_query += " AND oi.object_id = %s "
-        archive_params.append(int(archive_object_filter.split(" — ")[0]))
-    if archive_client_filter != "Все заказчики":
-        archive_query += " AND o.client_id = %s "
-        archive_params.append(int(archive_client_filter.split(" — ")[0]))
-
-    archive_query += " ORDER BY o.object_name, oi.item_name "
-
-    archive_df = run_query(archive_query, tuple(archive_params), fetch=True)
-
-    if archive_df.empty:
-        st.info("Установленных изделий пока нет.")
-    else:
-        archive_df = archive_df.rename(columns={
-            "object_name": "Объект",
-            "client_name": "Заказчик",
-            "item_name": "Изделие",
-            "quantity": "Установлено"
-        })[["Объект", "Заказчик", "Изделие", "Установлено"]]
-        st.dataframe(archive_df, width="stretch", hide_index=True)
 
 # ============================================================
 # PAYROLL
