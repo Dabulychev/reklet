@@ -3419,7 +3419,9 @@ elif menu == "Производство":
             st.subheader("Действие производства")
 
             item_map = {
-                f"{int(row['id'])} — {row['object_name']} — {row['item_name']}": int(row['id'])
+                f"{int(row['id'])} — {row['object_name']} — {row['item_name']} — "
+                f"доступно: {safe_int(row['qty_new'])} шт. / "
+                f"в производстве: {safe_int(row['qty_production'])} шт.": int(row['id'])
                 for _, row in df.iterrows()
             }
 
@@ -3444,8 +3446,10 @@ elif menu == "Производство":
 
             if action == "Запустить производство":
                 max_qty = safe_int(item_row["qty_new"])
+                st.caption(f"Максимально можно запустить сейчас: {max_qty} шт.")
             else:
                 max_qty = safe_int(item_row["qty_production"])
+                st.caption(f"Максимально можно передать в готовую продукцию сейчас: {max_qty} шт.")
 
             if max_qty > 0:
                 action_qty = st.number_input(
@@ -4255,137 +4259,131 @@ elif menu == "Готовая продукция":
 
 elif menu == "Транспорт и логистика":
 
-    st.header(
-        "Транспорт и логистика"
-    )
+    st.header("Транспорт и логистика")
 
-    df = run_query(
-        """
-        SELECT
+    objects = get_objects()
 
-            o.id,
-
-            o.object_name,
-
-            c.name AS client_name,
-
-            o.address,
-
-            COALESCE(
-                SUM(oi.qty_ready),
-                0
-            ) AS ready,
-
-            COALESCE(
-                SUM(oi.qty_shipped),
-                0
-            ) AS shipped,
-
-            COALESCE(
-                SUM(oi.qty_arrived),
-                0
-            ) AS arrived
-
-        FROM reklet.objects o
-
-        LEFT JOIN reklet.clients c
-            ON c.id = o.client_id
-
-        LEFT JOIN reklet.object_items oi
-            ON oi.object_id = o.id
-
-        GROUP BY
-
-            o.id,
-            o.object_name,
-            c.name,
-            o.address
-
-        ORDER BY
-            o.object_name
-        """,
-        fetch=True
-    )
-
-    if df.empty:
-
-        st.info(
-            "Нет данных по логистике."
-        )
-
+    if objects.empty:
+        st.info("Нет объектов.")
     else:
-
-        transport_view = df.copy()
-        st.dataframe(
-            transport_view,
-            width="stretch",
-            hide_index=True
+        # Единая схема: объект выбирается до перечня.
+        object_filter = st.selectbox(
+            "Объект",
+            ["Все объекты"] + [
+                f"{int(row['id'])} — {row['object_name']}"
+                for _, row in objects.iterrows()
+            ],
+            key="transport_object_filter"
         )
+
+        query = """
+        SELECT
+            o.id,
+            o.object_name,
+            c.name AS client_name,
+            o.address,
+            COALESCE(SUM(oi.qty_ready), 0) AS ready,
+            COALESCE(SUM(oi.qty_shipped), 0) AS shipped,
+            COALESCE(SUM(oi.qty_arrived), 0) AS arrived
+        FROM reklet.objects o
+        LEFT JOIN reklet.clients c ON c.id = o.client_id
+        LEFT JOIN reklet.object_items oi ON oi.object_id = o.id
+        WHERE (COALESCE(oi.qty_ready, 0) > 0 OR COALESCE(oi.qty_shipped, 0) > 0)
+        """
+        params = []
+
+        if object_filter != "Все объекты":
+            query += " AND o.id = %s "
+            params.append(int(object_filter.split(" — ")[0]))
+
+        query += """
+        GROUP BY o.id, o.object_name, c.name, o.address
+        ORDER BY o.object_name
+        """
+
+        df = run_query(query, tuple(params), fetch=True)
+
+        if df.empty:
+            st.info("Нет данных по логистике.")
+        else:
+            transport_view = df.rename(columns={
+                "object_name": "Объект",
+                "client_name": "Заказчик",
+                "address": "Адрес",
+                "ready": "Готово к отгрузке",
+                "shipped": "Отправлено",
+                "arrived": "Доставлено"
+            })[[
+                "Объект", "Заказчик", "Адрес",
+                "Готово к отгрузке", "Отправлено", "Доставлено"
+            ]]
+            st.dataframe(transport_view, width="stretch", hide_index=True)
 
         st.markdown("---")
+        st.subheader("Данные отгрузки объекта")
 
-        st.subheader(
-            "Данные отгрузки объекта"
-        )
+        if object_filter == "Все объекты":
+            detail_objects = objects.copy()
+        else:
+            detail_objects = objects[
+                objects["id"] == int(object_filter.split(" — ")[0])
+            ].copy()
 
-        object_map = {
+        if detail_objects.empty:
+            st.info("Нет выбранного объекта.")
+        else:
+            detail_object_map = {
+                f"{int(row['id'])} — {row['object_name']}": int(row['id'])
+                for _, row in detail_objects.iterrows()
+            }
 
-            f"{row['id']} — "
-            f"{row['object_name']}":
-                int(row["id"])
+            selected = st.selectbox(
+                "Объект",
+                list(detail_object_map.keys()),
+                key="transport_detail_object"
+            )
+            detail_object_id = detail_object_map[selected]
 
-            for _, row in df.iterrows()
-        }
+            detail = run_query(
+                """
+                SELECT
+                    oi.id,
+                    oi.item_name,
+                    oi.quantity_needed AS ordered,
+                    COALESCE(oi.qty_ready, 0) AS ready,
+                    COALESCE(oi.qty_shipped, 0) AS shipped,
+                    COALESCE(oi.qty_arrived, 0) AS arrived,
+                    GREATEST(
+                        COALESCE(oi.qty_ready, 0),
+                        0
+                    ) AS available_next
+                FROM reklet.object_items oi
+                WHERE oi.object_id = %s
+                  AND (
+                      COALESCE(oi.qty_ready, 0) > 0
+                      OR COALESCE(oi.qty_shipped, 0) > 0
+                  )
+                ORDER BY oi.item_name
+                """,
+                (detail_object_id,),
+                fetch=True
+            )
 
-        selected = st.selectbox(
-            "Объект",
-            list(object_map.keys())
-        )
-
-        object_id = object_map[
-            selected
-        ]
-
-        detail = run_query(
-            """
-            SELECT
-
-                oi.item_name,
-
-                oi.quantity_needed,
-
-                oi.qty_ready,
-
-                oi.qty_shipped,
-
-                oi.qty_arrived,
-
-                (
-                    oi.quantity_needed
-                    -
-                    oi.qty_arrived
-                ) AS remaining
-
-            FROM
-                reklet.object_items oi
-
-            WHERE
-                oi.object_id = %s
-
-            ORDER BY
-                oi.item_name
-            """,
-            (object_id,),
-            fetch=True
-        )
-
-        detail_view = detail.copy()
-        st.dataframe(
-            detail_view,
-            width="stretch",
-            hide_index=True
-        )
-
+            if detail.empty:
+                st.info("По выбранному объекту нет изделий для отгрузки.")
+            else:
+                detail_view = detail.rename(columns={
+                    "item_name": "Изделие",
+                    "ordered": "Заказано",
+                    "ready": "Готово к отгрузке",
+                    "shipped": "Отправлено",
+                    "arrived": "Доставлено",
+                    "available_next": "Можно отгрузить сейчас"
+                })[[
+                    "Изделие", "Заказано", "Готово к отгрузке",
+                    "Отправлено", "Доставлено", "Можно отгрузить сейчас"
+                ]]
+                st.dataframe(detail_view, width="stretch", hide_index=True)
 
 # ============================================================
 # INSTALLATION
@@ -4393,285 +4391,263 @@ elif menu == "Транспорт и логистика":
 
 elif menu == "Монтаж":
 
-    st.header(
-        "Монтаж"
-    )
+    st.header("Монтаж")
 
-    df = run_query(
-        """
+    objects = get_objects()
+
+    if objects.empty:
+        st.info("Нет объектов.")
+    else:
+        # Единая схема: отбор по объекту расположен перед перечнем.
+        object_filter = st.selectbox(
+            "Объект",
+            ["Все объекты"] + [
+                f"{row['id']} — {row['object_name']}"
+                for _, row in objects.iterrows()
+            ],
+            key="installation_object_filter"
+        )
+
+        query = """
         SELECT
-
-            o.id,
-
+            oi.id,
             o.object_name,
-
             c.name AS client_name,
-
-            COALESCE(
-                SUM(oi.quantity_needed),
-                0
-            ) AS required,
-
-            COALESCE(
-                SUM(oi.qty_arrived),
-                0
-            ) AS arrived,
-
-            COALESCE(
-                SUM(oi.qty_installing),
-                0
-            ) AS installing,
-
-            COALESCE(
-                SUM(oi.qty_installed),
-                0
-            ) AS installed,
-
-            COALESCE(
-                SUM(oi.quantity_needed)
-                -
-                SUM(oi.qty_installed),
+            oi.item_name,
+            oi.quantity_needed AS required,
+            (
+                COALESCE(oi.qty_arrived, 0)
+                + COALESCE(oi.qty_installing, 0)
+                + COALESCE(oi.qty_installed, 0)
+            ) AS received,
+            COALESCE(oi.qty_installing, 0) AS installing,
+            COALESCE(oi.qty_installed, 0) AS installed,
+            GREATEST(
+                oi.quantity_needed - COALESCE(oi.qty_installed, 0),
                 0
             ) AS remaining
+        FROM reklet.object_items oi
+        JOIN reklet.objects o ON o.id = oi.object_id
+        LEFT JOIN reklet.clients c ON c.id = o.client_id
+        WHERE COALESCE(oi.qty_installed, 0) < COALESCE(oi.quantity_needed, 0)
+        """
 
-        FROM reklet.objects o
+        params = []
+        if object_filter != "Все объекты":
+            object_id = int(object_filter.split(" — ")[0])
+            query += " AND oi.object_id = %s "
+            params.append(object_id)
 
-        LEFT JOIN reklet.clients c
-            ON c.id = o.client_id
+        query += " ORDER BY o.object_name, oi.item_name "
 
-        LEFT JOIN reklet.object_items oi
-            ON oi.object_id = o.id
+        df = run_query(query, tuple(params), fetch=True)
 
-        GROUP BY
+        if df.empty:
+            st.success("Нет изделий, ожидающих монтажа.")
+        else:
+            display = df.rename(columns={
+                "object_name": "Объект",
+                "client_name": "Заказчик",
+                "item_name": "Изделие",
+                "required": "Всего должно поступить",
+                "received": "Поступило",
+                "installing": "В стадии установки",
+                "installed": "Установлено",
+                "remaining": "Осталось"
+            })[[
+                "Объект", "Заказчик", "Изделие",
+                "Всего должно поступить", "Поступило",
+                "В стадии установки", "Установлено", "Осталось"
+            ]]
 
-            o.id,
-            o.object_name,
-            c.name
+            st.subheader("Перечень")
+            st.dataframe(display, width="stretch", hide_index=True)
 
-        ORDER BY
-            o.object_name
-        """,
-        fetch=True
-    )
-
-    if df.empty:
-
-        st.info(
-            "Нет данных по монтажу."
-        )
-
-    else:
-
-        installation_view = df.copy()
-        st.dataframe(
-            installation_view,
-            width="stretch",
-            hide_index=True
-        )
-
-        st.markdown("---")
-
-        st.subheader(
-            "Действие монтажа"
-        )
-
-        object_map = {
-
-            f"{row['id']} — "
-            f"{row['object_name']}":
-                int(row["id"])
-
-            for _, row in df.iterrows()
-        }
-
-        selected = st.selectbox(
-            "Объект",
-            list(object_map.keys())
-        )
-
-        object_id = object_map[
-            selected
-        ]
-
-        items = get_object_items(
-            object_id
-        )
-
-        if not items.empty:
+            st.markdown("---")
+            st.subheader("Действие монтажа")
 
             item_map = {
-
-                f"{row['id']} — "
-                f"{row['item_name']}":
-                    int(row["id"])
-
-                for _, row in items.iterrows()
+                f"{int(row['id'])} — {row['object_name']} — {row['item_name']} — "
+                f"к монтажу: {max(safe_int(row['received']) - safe_int(row['installing']) - safe_int(row['installed']), 0)} шт. / "
+                f"к завершению: {safe_int(row['installing'])} шт.": int(row['id'])
+                for _, row in df.iterrows()
             }
 
-            item_label = st.selectbox(
+            selected_item = st.selectbox(
                 "Изделие",
-                list(item_map.keys())
+                list(item_map.keys()),
+                key="installation_action_item"
             )
 
-            item_id = item_map[
-                item_label
-            ]
-
-            item_row = items[
-                items["id"] == item_id
-            ].iloc[0]
+            item_id = item_map[selected_item]
+            item_row = df[df["id"] == item_id].iloc[0]
 
             st.write(
-                f"Доставлено: "
-                f"{safe_int(item_row['qty_arrived'])}"
-            )
-
-            st.write(
-                f"В монтаже: "
-                f"{safe_int(item_row['qty_installing'])}"
-            )
-
-            st.write(
-                f"Смонтировано: "
-                f"{safe_int(item_row['qty_installed'])}"
+                f"Всего должно поступить: {safe_int(item_row['required'])} шт.  |  "
+                f"Поступило: {safe_int(item_row['received'])} шт.  |  "
+                f"В стадии установки: {safe_int(item_row['installing'])} шт.  |  "
+                f"Установлено: {safe_int(item_row['installed'])} шт."
             )
 
             action = st.radio(
                 "Действие",
-                [
-                    "Начать монтаж",
-                    "Завершить монтаж"
-                ],
-                horizontal=True
+                ["Начать монтаж", "Завершить монтаж"],
+                horizontal=True,
+                key="installation_action_type"
             )
 
             if action == "Начать монтаж":
-
-                available = safe_int(
-                    item_row["qty_arrived"]
+                available = (
+                    safe_int(item_row["received"])
+                    - safe_int(item_row["installing"])
+                    - safe_int(item_row["installed"])
                 )
-
+                st.caption(f"Максимально можно передать в монтаж сейчас: {max(available, 0)} шт.")
             else:
+                available = safe_int(item_row["installing"])
+                st.caption(f"Максимально можно завершить сейчас: {max(available, 0)} шт.")
 
-                available = safe_int(
-                    item_row["qty_installing"]
+            if available > 0:
+                qty = st.number_input(
+                    "Количество",
+                    min_value=1,
+                    max_value=available,
+                    value=1,
+                    step=1,
+                    key="installation_action_qty"
                 )
 
-            qty = st.number_input(
-                "Количество",
-                min_value=1,
-                max_value=(
-                    available
-                    if available > 0
-                    else 1
-                ),
-                value=1
-            )
-
-            if st.button(
-                "Выполнить действие монтажа"
-            ):
-
-                if action == "Начать монтаж":
-
-                    run_query(
-                        """
-                        UPDATE
-                            reklet.object_items
-
-                        SET
-
-                            qty_arrived =
-                                qty_arrived - %s,
-
-                            qty_installing =
-                                qty_installing + %s,
-
-                            installation_status =
-                                'in_progress'
-
-                        WHERE id = %s
-                        """,
-                        (
-                            qty,
-                            qty,
-                            item_id
+                if st.button("Исполнить", key="installation_action_button"):
+                    if action == "Начать монтаж":
+                        run_query(
+                            """
+                            UPDATE reklet.object_items
+                            SET
+                                qty_arrived = COALESCE(qty_arrived, 0) - %s,
+                                qty_installing = COALESCE(qty_installing, 0) + %s,
+                                installation_status = 'in_progress'
+                            WHERE id = %s
+                            """,
+                            (qty, qty, item_id)
                         )
-                    )
-
-                else:
-
-                    run_query(
-                        """
-                        UPDATE
-                            reklet.object_items
-
-                        SET
-
-                            qty_installing =
-                                qty_installing - %s,
-
-                            qty_installed =
-                                qty_installed + %s,
-
-                            installation_status =
-
-                                CASE
-
-                                    WHEN
-
-                                        qty_installing - %s <= 0
-
-                                        AND
-
-                                        qty_arrived <= 0
-
+                    else:
+                        run_query(
+                            """
+                            UPDATE reklet.object_items
+                            SET
+                                qty_installing = COALESCE(qty_installing, 0) - %s,
+                                qty_installed = COALESCE(qty_installed, 0) + %s,
+                                installation_status = CASE
+                                    WHEN COALESCE(qty_installing, 0) - %s <= 0
+                                         AND COALESCE(qty_arrived, 0) <= 0
+                                         AND COALESCE(qty_installed, 0) + %s >= quantity_needed
                                     THEN 'completed'
-
                                     ELSE 'in_progress'
-
                                 END,
-
-                            installation_progress_pct =
-
-                                CASE
-
-                                    WHEN quantity_needed > 0
-
-                                    THEN LEAST(
+                                installation_progress_pct = CASE
+                                    WHEN quantity_needed > 0 THEN LEAST(
                                         100,
                                         ROUND(
-                                            (
-                                                qty_installed
-                                                + %s
-                                            )::numeric
-                                            /
-                                            quantity_needed
-                                            * 100
+                                            (COALESCE(qty_installed, 0) + %s)::numeric
+                                            / quantity_needed * 100
                                         )
                                     )
-
                                     ELSE 0
-
                                 END
-
-                        WHERE id = %s
-                        """,
-                        (
-                            qty,
-                            qty,
-                            qty,
-                            qty,
-                            item_id
+                            WHERE id = %s
+                            """,
+                            (qty, qty, qty, qty, qty, item_id)
                         )
-                    )
 
-                st.success(
-                    "Монтаж обновлён."
-                )
+                    st.success("Монтаж обновлён.")
+                    st.rerun()
+            else:
+                st.info("Для выбранного действия сейчас нет доступного количества.")
 
-                st.rerun()
+    # Архив: полностью завершённые строки исчезают из рабочего списка,
+    # но остаются здесь с возможностью отбора по объекту и заказчику.
+    st.markdown("---")
+    st.subheader("Движения по монтажу")
 
+    archive_objects = run_query(
+        """
+        SELECT DISTINCT o.id, o.object_name
+        FROM reklet.object_items oi
+        JOIN reklet.objects o ON o.id = oi.object_id
+        WHERE COALESCE(oi.qty_installed, 0) >= COALESCE(oi.quantity_needed, 0)
+          AND COALESCE(oi.quantity_needed, 0) > 0
+        ORDER BY o.object_name
+        """,
+        fetch=True
+    )
+
+    archive_clients = run_query(
+        """
+        SELECT DISTINCT c.id, c.name
+        FROM reklet.object_items oi
+        JOIN reklet.objects o ON o.id = oi.object_id
+        LEFT JOIN reklet.clients c ON c.id = o.client_id
+        WHERE COALESCE(oi.qty_installed, 0) > 0
+        ORDER BY c.name
+        """,
+        fetch=True
+    )
+
+    a1, a2 = st.columns(2)
+    with a1:
+        archive_object_filter = st.selectbox(
+            "Отбор по объекту",
+            ["Все объекты"] + [
+                f"{int(row['id'])} — {row['object_name']}"
+                for _, row in archive_objects.iterrows()
+            ] if not archive_objects.empty else ["Все объекты"],
+            key="installation_archive_object_filter"
+        )
+    with a2:
+        archive_client_filter = st.selectbox(
+            "Отбор по заказчику",
+            ["Все заказчики"] + [
+                f"{int(row['id'])} — {row['name']}"
+                for _, row in archive_clients.iterrows()
+            ] if not archive_clients.empty else ["Все заказчики"],
+            key="installation_archive_client_filter"
+        )
+
+    archive_query = """
+        SELECT
+            o.object_name,
+            c.name AS client_name,
+            oi.item_name,
+            oi.qty_installed AS quantity
+        FROM reklet.object_items oi
+        JOIN reklet.objects o ON o.id = oi.object_id
+        LEFT JOIN reklet.clients c ON c.id = o.client_id
+        WHERE COALESCE(oi.qty_installed, 0) >= COALESCE(oi.quantity_needed, 0)
+      AND COALESCE(oi.quantity_needed, 0) > 0
+    """
+    archive_params = []
+
+    if archive_object_filter != "Все объекты":
+        archive_query += " AND oi.object_id = %s "
+        archive_params.append(int(archive_object_filter.split(" — ")[0]))
+    if archive_client_filter != "Все заказчики":
+        archive_query += " AND o.client_id = %s "
+        archive_params.append(int(archive_client_filter.split(" — ")[0]))
+
+    archive_query += " ORDER BY o.object_name, oi.item_name "
+
+    archive_df = run_query(archive_query, tuple(archive_params), fetch=True)
+
+    if archive_df.empty:
+        st.info("Установленных изделий пока нет.")
+    else:
+        archive_df = archive_df.rename(columns={
+            "object_name": "Объект",
+            "client_name": "Заказчик",
+            "item_name": "Изделие",
+            "quantity": "Установлено"
+        })[["Объект", "Заказчик", "Изделие", "Установлено"]]
+        st.dataframe(archive_df, width="stretch", hide_index=True)
 
 # ============================================================
 # PAYROLL
