@@ -506,35 +506,43 @@ def get_objects():
 
 
 
-def get_active_work_objects():
-    """
-    Объекты, по которым еще не завершены все изделия.
-    Полностью установленные объекты не показываются в рабочих
-    разделах: Производство, Готовая продукция, Транспорт и логистика, Монтаж.
-    """
-    return run_query(
+def get_stage_objects(stage):
+    """Объекты только с актуальными изделиями для конкретного этапа."""
+    conditions = {
+        "production": """
+            COALESCE(oi.qty_new, 0) > 0
+            OR COALESCE(oi.qty_production, 0) > 0
+        """,
+        "finished_goods": """
+            COALESCE(oi.qty_ready, 0) > 0
+            OR COALESCE(oi.qty_shipped, 0) > 0
+        """,
+        "transport": """
+            COALESCE(oi.qty_ready, 0) > 0
+            OR COALESCE(oi.qty_shipped, 0) > 0
+        """,
+        "installation": """
+            (
+                COALESCE(oi.qty_arrived, 0) > 0
+                OR COALESCE(oi.qty_installing, 0) > 0
+            )
+            AND COALESCE(oi.qty_installed, 0) < COALESCE(oi.quantity_needed, 0)
         """
-        SELECT
-            o.id,
-            o.object_name,
-            o.client_id,
-            c.name AS client_name,
-            o.address
+    }
+    if stage not in conditions:
+        raise ValueError(f"Unknown work stage: {stage}")
+    return run_query(
+        f"""
+        SELECT DISTINCT o.id, o.object_name, o.client_id,
+               c.name AS client_name, o.address
         FROM reklet.objects o
-        LEFT JOIN reklet.clients c
-            ON c.id = o.client_id
-        WHERE EXISTS (
-            SELECT 1
-            FROM reklet.object_items oi
-            WHERE oi.object_id = o.id
-              AND COALESCE(oi.quantity_needed, 0) > COALESCE(oi.qty_installed, 0)
-        )
+        LEFT JOIN reklet.clients c ON c.id = o.client_id
+        JOIN reklet.object_items oi ON oi.object_id = o.id
+        WHERE {conditions[stage]}
         ORDER BY o.id DESC
         """,
         fetch=True
     )
-
-
 
 def get_materials():
 
@@ -3350,7 +3358,7 @@ elif menu == "Производство":
 
     st.header("Производство")
 
-    objects = get_active_work_objects()
+    objects = get_stage_objects("production")
 
     if objects.empty:
         st.info("Нет объектов.")
@@ -3646,17 +3654,6 @@ elif menu == "Производство":
         col1, col2 = st.columns(2)
 
         with col1:
-            movement_object_options = ["Все объекты"] + [
-                f"{int(row['id'])} — {row['object_name']}"
-                for _, row in movement_objects.iterrows()
-            ]
-            movement_object_filter = st.selectbox(
-                "Отбор по объекту",
-                movement_object_options,
-                key="production_movement_object_filter"
-            )
-
-        with col2:
             movement_client_options = ["Все заказчики"] + [
                 f"{int(row['id'])} — {row['name']}"
                 for _, row in movement_clients.iterrows()
@@ -3665,6 +3662,17 @@ elif menu == "Производство":
                 "Отбор по заказчику",
                 movement_client_options,
                 key="production_movement_client_filter"
+            )
+
+        with col2:
+            movement_object_options = ["Все объекты"] + [
+                f"{int(row['id'])} — {row['object_name']}"
+                for _, row in movement_objects.iterrows()
+            ]
+            movement_object_filter = st.selectbox(
+                "Отбор по объекту",
+                movement_object_options,
+                key="production_movement_object_filter"
             )
 
         movement_query = """
@@ -3735,7 +3743,7 @@ elif menu == "Готовая продукция":
         "Готовая продукция"
     )
 
-    objects = get_active_work_objects()
+    objects = get_stage_objects("finished_goods")
 
     if objects.empty:
 
@@ -4180,22 +4188,8 @@ elif menu == "Готовая продукция":
 
     with m1:
 
-        movement_object_filter = st.selectbox(
-            "Объект",
-            ["Все объекты"]
-            + [
-                f"{row['id']} — {row['object_name']}"
-                for _, row in movement_objects.iterrows()
-            ]
-            if not movement_objects.empty
-            else ["Все объекты"],
-            key="finished_goods_movement_object_filter"
-        )
-
-    with m2:
-
         movement_client_filter = st.selectbox(
-            "Заказчик",
+            "Отбор по заказчику",
             ["Все заказчики"]
             + [
                 f"{row['id']} — {row['name']}"
@@ -4204,6 +4198,20 @@ elif menu == "Готовая продукция":
             if not movement_clients.empty
             else ["Все заказчики"],
             key="finished_goods_movement_client_filter"
+        )
+
+    with m2:
+
+        movement_object_filter = st.selectbox(
+            "Отбор по объекту",
+            ["Все объекты"]
+            + [
+                f"{row['id']} — {row['object_name']}"
+                for _, row in movement_objects.iterrows()
+            ]
+            if not movement_objects.empty
+            else ["Все объекты"],
+            key="finished_goods_movement_object_filter"
         )
 
     movement_query = """
@@ -4239,11 +4247,11 @@ elif menu == "Готовая продукция":
             int(movement_object_filter.split(" — ")[0])
         )
 
-    if movement_client_filter != "Все заказчики":
+    if movement_object_filter != "Все объекты":
 
         movement_query += " AND o.client_id = %s "
         movement_params.append(
-            int(movement_client_filter.split(" — ")[0])
+            int(movement_object_filter.split(" — ")[0])
         )
 
     movement_query += """
@@ -4270,7 +4278,7 @@ elif menu == "Готовая продукция":
         movements = movements.rename(
             columns={
                 "object_name": "Объект",
-                "client_name": "Заказчик",
+                "client_name": "Отбор по объекту",
                 "item_name": "Изделие",
                 "quantity": "Количество",
                 "created_at": "Когда доставлено"
@@ -4278,7 +4286,7 @@ elif menu == "Готовая продукция":
         )[
             [
                 "Объект",
-                "Заказчик",
+                "Отбор по объекту",
                 "Изделие",
                 "Количество",
                 "Когда доставлено"
@@ -4299,7 +4307,7 @@ elif menu == "Транспорт и логистика":
 
     st.header("Транспорт и логистика")
 
-    objects = get_active_work_objects()
+    objects = get_stage_objects("transport")
 
     if objects.empty:
         st.info("Нет объектов.")
@@ -4499,7 +4507,7 @@ elif menu == "Монтаж":
 
     st.header("Монтаж")
 
-    objects = get_active_work_objects()
+    objects = get_stage_objects("installation")
 
     if objects.empty:
         st.info("Нет объектов.")
@@ -4701,15 +4709,6 @@ elif menu == "Монтаж":
 
     a1, a2 = st.columns(2)
     with a1:
-        archive_object_filter = st.selectbox(
-            "Отбор по объекту",
-            ["Все объекты"] + [
-                f"{int(row['id'])} — {row['object_name']}"
-                for _, row in archive_objects.iterrows()
-            ] if not archive_objects.empty else ["Все объекты"],
-            key="installation_archive_object_filter"
-        )
-    with a2:
         archive_client_filter = st.selectbox(
             "Отбор по заказчику",
             ["Все заказчики"] + [
@@ -4718,6 +4717,566 @@ elif menu == "Монтаж":
             ] if not archive_clients.empty else ["Все заказчики"],
             key="installation_archive_client_filter"
         )
+    with a2:
+        archive_object_filter = st.selectbox(
+            "Отбор по объекту",
+            ["Все объекты"] + [
+                f"{int(row['id'])} — {row['object_name']}"
+                for _, row in archive_objects.iterrows()
+            ] if not archive_objects.empty else ["Все объекты"],
+            key="installation_archive_object_filter"
+        )
+
+    archive_query = """
+        SELECT
+            o.object_name,
+            c.name AS client_name,
+            oi.item_name,
+            oi.qty_installed AS quantity
+        FROM reklet.object_items oi
+        JOIN reklet.objects o ON o.id = oi.object_id
+        LEFT JOIN reklet.clients c ON c.id = o.client_id
+        WHERE COALESCE(oi.qty_installed, 0) >= COALESCE(oi.quantity_needed, 0)
+      AND COALESCE(oi.quantity_needed, 0) > 0
+    """
+    archive_params = []
+
+    if archive_object_filter != "Все объекты":
+        archive_query += " AND oi.object_id = %s "
+        archive_params.append(int(archive_object_filter.split(" — ")[0]))
+    if archive_object_filter != "Все объекты":
+        archive_query += " AND o.client_id = %s "
+        archive_params.append(int(archive_object_filter.split(" — ")[0]))
+
+    archive_query += " ORDER BY o.object_name, oi.item_name "
+
+    archive_df = run_query(archive_query, tuple(archive_params), fetch=True)
+
+    if archive_df.empty:
+        st.info("Установленных изделий пока нет.")
+    else:
+        archive_df = archive_df.rename(columns={
+            "object_name": "Объект",
+            "client_name": "Заказчик",
+            "item_name": "Изделие",
+            "quantity": "Установлено"
+        })[["Объект", "Заказчик", "Изделие", "Установлено"]]
+        st.dataframe(archive_df, width="stretch", hide_index=True)
+
+# ============================================================
+# PAYROLL
+# ============================================================
+
+elif menu == "Зарплата":
+
+    st.header("Зарплата")
+
+    if "payroll_section" not in st.session_state:
+        st.session_state.payroll_section = "Производство"
+
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        if st.button("Зарплата производства", key="payroll_production_btn", width="stretch"):
+            st.session_state.payroll_section = "Производство"
+    with b2:
+        if st.button("Зарплата транспортировки", key="payroll_transport_btn", width="stretch"):
+            st.session_state.payroll_section = "Транспортировка"
+    with b3:
+        if st.button("Зарплата монтажа", key="payroll_install_btn", width="stretch"):
+            st.session_state.payroll_section = "Монтаж"
+    with b4:
+        if st.button("Сводка по зарплате", key="payroll_summary_btn", width="stretch"):
+            st.session_state.payroll_section = "Сводка"
+
+    st.markdown("---")
+
+    # Себестоимость материалов одного элемента.
+    payroll_items = run_query(
+        """
+        SELECT
+            oi.id AS object_item_id,
+            oi.object_id,
+            o.object_name,
+            COALESCE(c.name, '') AS client_name,
+            oi.item_name,
+            COALESCE(oi.quantity_needed, 0) AS quantity_needed,
+            COALESCE(oi.qty_ready, 0) + COALESCE(oi.qty_shipped, 0) +
+            COALESCE(oi.qty_arrived, 0) + COALESCE(oi.qty_installing, 0) +
+            COALESCE(oi.qty_installed, 0) AS produced_quantity,
+            COALESCE(oi.qty_installed, 0) AS installed_quantity,
+            COALESCE(oi.qty_shipped, 0) + COALESCE(oi.qty_arrived, 0) +
+            COALESCE(oi.qty_installing, 0) + COALESCE(oi.qty_installed, 0) AS transported_quantity,
+            COALESCE(o.transport_distance_km, 0) AS distance_km,
+            COALESCE(o.delivery_cost, 0) AS stored_delivery_cost,
+            COALESCE(SUM(
+                ptm.quantity_per_unit *
+                COALESCE(ptm.waste_coefficient, m.default_waste_coefficient, 1) *
+                COALESCE(m.cost_per_unit, 0)
+            ), 0) AS material_cost_per_unit
+        FROM reklet.object_items oi
+        JOIN reklet.objects o ON o.id = oi.object_id
+        LEFT JOIN reklet.clients c ON c.id = o.client_id
+        LEFT JOIN reklet.product_templates pt
+            ON pt.id = COALESCE(oi.product_template_id, oi.template_id)
+        LEFT JOIN reklet.product_template_materials ptm
+            ON ptm.product_template_id = pt.id
+        LEFT JOIN reklet.materials m
+            ON m.id = ptm.material_id
+        GROUP BY
+            oi.id, oi.object_id, o.object_name, c.name, oi.item_name,
+            oi.quantity_needed, oi.qty_ready, oi.qty_shipped, oi.qty_arrived,
+            oi.qty_installing, oi.qty_installed, o.transport_distance_km, o.delivery_cost
+        ORDER BY o.object_name, oi.item_name
+        """,
+        fetch=True
+    )
+
+    if payroll_items.empty:
+        st.info("Нет элементов для расчёта зарплаты.")
+    else:
+        # PostgreSQL numeric/Decimal values and nullable quantities are normalized
+        # before arithmetic so Pandas never tries to multiply strings by numbers.
+        numeric_cols = [
+            "material_cost_per_unit",
+            "produced_quantity",
+            "installed_quantity",
+            "transported_quantity",
+            "distance_km",
+            "quantity_needed"
+        ]
+        for col in numeric_cols:
+            if col in payroll_items.columns:
+                payroll_items[col] = pd.to_numeric(
+                    payroll_items[col], errors="coerce"
+                ).fillna(0.0)
+
+        if st.session_state.payroll_section == "Производство":
+            view = payroll_items.copy()
+            view["Себестоимость материалов"] = view["material_cost_per_unit"]
+            view["Количество"] = view["produced_quantity"]
+            view["Зарплата производства"] = view["material_cost_per_unit"] * view["produced_quantity"] * 1.50
+            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
+            st.caption("Зарплата производства = себестоимость материалов × количество произведённых элементов × 1,50 (+50%).")
+            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата производства"]], width="stretch", hide_index=True)
+
+        elif st.session_state.payroll_section == "Монтаж":
+            view = payroll_items.copy()
+            view["Себестоимость материалов"] = view["material_cost_per_unit"]
+            view["Количество"] = view["installed_quantity"]
+            view["Зарплата монтажа"] = view["material_cost_per_unit"] * view["installed_quantity"] * 1.40
+            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
+            st.caption("Зарплата монтажа = себестоимость материалов × количество установленных элементов × 1,40 (+40%).")
+            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата монтажа"]], width="stretch", hide_index=True)
+
+        elif st.session_state.payroll_section == "Транспортировка":
+            view = payroll_items.copy()
+            view["Себестоимость материалов"] = view["material_cost_per_unit"] * view["transported_quantity"]
+            view["Количество"] = view["transported_quantity"]
+            view["Зарплата транспортировки"] = view["Себестоимость материалов"] * 0.10 + view["distance_km"] * 2
+            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие", "distance_km":"Расстояние, км"})
+            st.caption("Доставка = 10% от себестоимости материалов перевезённых элементов + расстояние × 2 условные единицы.")
+            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Расстояние, км", "Зарплата транспортировки"]], width="stretch", hide_index=True)
+
+        else:
+            view = payroll_items.copy()
+            view["Производство"] = view["material_cost_per_unit"] * view["produced_quantity"] * 1.50
+            view["Монтаж"] = view["material_cost_per_unit"] * view["installed_quantity"] * 1.40
+            view["Доставка"] = (view["material_cost_per_unit"] * view["transported_quantity"] * 0.10) + view["distance_km"] * 2
+            view["Итого"] = view["Производство"] + view["Монтаж"] + view["Доставка"]
+            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
+            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Производство", "Монтаж", "Доставка", "Итого"]], width="stretch", hide_index=True)
+
+            summary = view.groupby(["Объект", "Заказчик"], as_index=False)[["Производство", "Монтаж", "Доставка", "Итого"]].sum()
+            st.subheader("Сводка по объектам")
+            st.dataframe(summary, width="stretch", hide_index=True)
+
+
+# ============================================================
+# REPORTS
+# ============================================================
+
+elif menu == "Отчёты":
+
+    st.header("Отчёты")
+
+    # ========================================================
+    # REPORT BUTTONS
+    # ========================================================
+    if "reports_section" not in st.session_state:
+        st.session_state["reports_section"] = "Сводные таблицы"
+
+    rb1, rb2 = st.columns(2)
+    rb3, rb4 = st.columns(2)
+
+    with rb1:
+        if st.button("Сводные таблицы", key="reports_summary_btn", use_container_width=True):
+            st.session_state["reports_section"] = "Сводные таблицы"
+            st.rerun()
+    with rb2:
+        if st.button("Печать документов", key="reports_print_btn", use_container_width=True):
+            st.session_state["reports_section"] = "Печать документов"
+            st.rerun()
+    with rb3:
+        if st.button("Операционные отчёты", key="reports_operational_btn", use_container_width=True):
+            st.session_state["reports_section"] = "Операционные отчёты"
+            st.rerun()
+    with rb4:
+        if st.button("Складские отчёты", key="reports_stock_btn", use_container_width=True):
+            st.session_state["reports_section"] = "Складские отчёты"
+            st.rerun()
+
+    st.markdown("---")
+
+    # ========================================================
+    # COMMON COST DATA
+    # ========================================================
+    report_q = """
+    SELECT
+        o.id AS object_id,
+        o.object_name,
+        c.name AS client_name,
+        o.address,
+        COALESCE(o.transport_distance_km, 0) AS distance_km,
+        oi.id AS object_item_id,
+        oi.item_name,
+        COALESCE(oi.quantity_needed, 0) AS quantity_needed,
+        COALESCE(oi.qty_installed, 0) AS qty_installed,
+        (
+            COALESCE(oi.qty_arrived, 0)
+            + COALESCE(oi.qty_installing, 0)
+            + COALESCE(oi.qty_installed, 0)
+        ) AS qty_arrived,
+        (
+            COALESCE(oi.qty_shipped, 0)
+            + COALESCE(oi.qty_arrived, 0)
+            + COALESCE(oi.qty_installing, 0)
+            + COALESCE(oi.qty_installed, 0)
+        ) AS qty_shipped,
+        COALESCE(oi.qty_ready, 0) AS qty_ready,
+        COALESCE(SUM(
+            ptm.quantity_per_unit
+            * m.cost_per_unit
+            * COALESCE(ptm.waste_coefficient, 1)
+        ), 0) AS material_unit_cost
+    FROM reklet.object_items oi
+    JOIN reklet.objects o ON o.id = oi.object_id
+    LEFT JOIN reklet.clients c ON c.id = o.client_id
+    LEFT JOIN reklet.product_template_materials ptm
+        ON ptm.product_template_id = oi.product_template_id
+    LEFT JOIN reklet.materials m ON m.id = ptm.material_id
+    GROUP BY
+        o.id, o.object_name, c.name, o.address,
+        o.transport_distance_km,
+        oi.id, oi.item_name, oi.quantity_needed,
+        oi.qty_installed, oi.qty_arrived, oi.qty_installing, oi.qty_shipped, oi.qty_ready
+    ORDER BY o.object_name, oi.item_name
+    """
+
+    report_df = run_query(report_q, fetch=True)
+
+    if not report_df.empty:
+        numeric_cols = [
+            "quantity_needed", "qty_installed", "qty_arrived",
+            "qty_shipped", "qty_ready", "material_unit_cost", "distance_km"
+        ]
+        for col in numeric_cols:
+            report_df[col] = pd.to_numeric(report_df[col], errors="coerce").fillna(0.0)
+
+        report_df["Материалы"] = report_df["material_unit_cost"] * report_df["quantity_needed"]
+        report_df["Производство"] = report_df["Материалы"] * 0.50
+        report_df["Монтаж"] = report_df["Материалы"] * 0.40
+        report_df["Доставка"] = report_df["Материалы"] * 0.10 + report_df["distance_km"] * 2
+        report_df["Себестоимость"] = report_df["Материалы"] + report_df["Производство"] + report_df["Монтаж"] + report_df["Доставка"]
+        report_df["Цена объекта"] = report_df["Себестоимость"] * 2
+        report_df["Остаток"] = (report_df["quantity_needed"] - report_df["qty_installed"]).clip(lower=0)
+
+    # ========================================================
+    # 1. SUMMARY TABLES
+    # ========================================================
+    if st.session_state["reports_section"] == "Сводные таблицы":
+
+        st.subheader("По заказчикам")
+
+        if report_df.empty:
+            st.info("Нет данных для сводной таблицы.")
+        else:
+            client_summary = report_df.groupby(
+                ["client_name"], dropna=False
+            ).agg(
+                Объектов=("object_id", "nunique"),
+                Изделий=("quantity_needed", "sum"),
+                Материалы=("Материалы", "sum"),
+                Производство=("Производство", "sum"),
+                Монтаж=("Монтаж", "sum"),
+                Доставка=("Доставка", "sum"),
+                Себестоимость=("Себестоимость", "sum"),
+                Стоимость=("Цена объекта", "sum"),
+                Выполнено=("qty_installed", "sum"),
+            ).reset_index()
+            client_summary = client_summary.rename(columns={"client_name": "Заказчик"})
+            st.dataframe(client_summary, width="stretch", hide_index=True)
+
+        st.subheader("По объектам")
+
+        if not report_df.empty:
+            object_summary = report_df.groupby(
+                ["object_id", "object_name", "client_name", "address"], dropna=False
+            ).agg(
+                Изделий=("quantity_needed", "sum"),
+                Выполнено=("qty_installed", "sum"),
+                Остаток=("Остаток", "sum"),
+                Материалы=("Материалы", "sum"),
+                Производство=("Производство", "sum"),
+                Монтаж=("Монтаж", "sum"),
+                Доставка=("Доставка", "sum"),
+                Себестоимость=("Себестоимость", "sum"),
+                Стоимость=("Цена объекта", "sum"),
+            ).reset_index()
+            object_summary.columns = [
+                "№", "Объект", "Заказчик", "Адрес", "Изделий", "Выполнено",
+                "Остаток", "Материалы", "Производство", "Монтаж", "Доставка",
+                "Себестоимость", "Стоимость объекта"
+            ]
+            st.dataframe(object_summary, width="stretch", hide_index=True)
+
+        st.subheader("Общие показатели")
+        if not report_df.empty:
+            totals = pd.DataFrame([{
+                "Показатель": "Все объекты",
+                "Объектов": report_df["object_id"].nunique(),
+                "Изделий заказано": report_df["quantity_needed"].sum(),
+                "Изделий установлено": report_df["qty_installed"].sum(),
+                "Материалы": report_df["Материалы"].sum(),
+                "Зарплата производства": report_df["Производство"].sum(),
+                "Зарплата монтажа": report_df["Монтаж"].sum(),
+                "Доставка": report_df["Доставка"].sum(),
+                "Себестоимость": report_df["Себестоимость"].sum(),
+                "Цена с наценкой 100%": report_df["Цена объекта"].sum(),
+            }])
+            st.dataframe(totals, width="stretch", hide_index=True)
+
+    # ========================================================
+    # 2. PRINT DOCUMENTS
+    # ========================================================
+    elif st.session_state["reports_section"] == "Печать документов":
+
+        st.subheader("Готовые документы")
+
+        document_type = st.selectbox(
+            "Документ",
+            [
+                "Выверка по объекту",
+                "Выверка по заказчику",
+                "Смета объекта",
+                "Акт сдачи-приёмки работ",
+                "Приходная накладная",
+                "Расходная накладная",
+            ],
+            key="print_document_type"
+        )
+
+        # ---------- Reusable printable HTML ----------
+        def printable_html(title, body_html):
+            return f"""
+            <!doctype html>
+            <html><head><meta charset='utf-8'>
+            <title>{escape(title)}</title>
+            <style>
+            body {{ font-family: Arial, sans-serif; margin: 35px; color: #111; }}
+            h1 {{ font-size: 22px; margin-bottom: 8px; }}
+            h2 {{ font-size: 17px; margin-top: 22px; }}
+            table {{ border-collapse: collapse; width: 100%; margin-top: 10px; }}
+            th, td {{ border: 1px solid #777; padding: 6px 8px; text-align: left; }}
+            th {{ background: #eee; }}
+            .right {{ text-align: right; }}
+            .sign {{ margin-top: 45px; display: flex; justify-content: space-between; }}
+            </style></head><body>
+            <h1>{escape(title)}</h1>
+            {body_html}
+            </body></html>
+            """
+
+        if document_type in ["Выверка по объекту", "Смета объекта", "Акт сдачи-приёмки работ"]:
+            if report_df.empty:
+                st.info("Нет объектов для формирования документа.")
+            else:
+                object_options = [
+                    f"{int(r['object_id'])} — {r['object_name']}"
+                    for _, r in report_df[["object_id", "object_name"]].drop_duplicates().iterrows()
+                ]
+                selected_object = st.selectbox("Объект", object_options, key="print_object")
+                selected_object_id = int(selected_object.split(" — ")[0])
+                doc = report_df[report_df["object_id"] == selected_object_id].copy()
+
+                object_name = str(doc.iloc[0]["object_name"])
+                client_name = str(doc.iloc[0]["client_name"] or "")
+                address = str(doc.iloc[0]["address"] or "")
+
+                if document_type == "Выверка по объекту":
+                    view = doc[["item_name", "quantity_needed", "qty_ready", "qty_shipped", "qty_arrived", "qty_installed"]].copy()
+                    view.columns = ["Изделие", "Запланировано", "Готово", "Отправлено", "Доставлено", "Выполнено"]
+                    view["Остаток"] = (view["Запланировано"] - view["Выполнено"]).clip(lower=0)
+                    st.dataframe(view, width="stretch", hide_index=True)
+                    body = f"<p><b>Заказчик:</b> {escape(client_name)}<br><b>Адрес:</b> {escape(address)}</p>"
+                    body += view.to_html(index=False)
+                    body += "<div class='sign'><span>Представитель заказчика: __________________</span><span>Представитель исполнителя: __________________</span></div>"
+                    title = f"Выверка по объекту — {object_name}"
+
+                elif document_type == "Смета объекта":
+                    estimate = doc.groupby("item_name", as_index=False).agg(
+                        Количество=("quantity_needed", "sum"),
+                        Материалы=("Материалы", "sum"),
+                        Производство=("Производство", "sum"),
+                        Монтаж=("Монтаж", "sum"),
+                        Доставка=("Доставка", "sum"),
+                        Себестоимость=("Себестоимость", "sum"),
+                        Стоимость=("Цена объекта", "sum"),
+                    )
+                    st.dataframe(estimate, width="stretch", hide_index=True)
+                    totals = estimate[["Материалы", "Производство", "Монтаж", "Доставка", "Себестоимость", "Стоимость"]].sum()
+                    st.write(f"**Итого материалов:** {money(totals['Материалы'])}")
+                    st.write(f"**Итого себестоимость:** {money(totals['Себестоимость'])}")
+                    st.write(f"**Итоговая стоимость с наценкой 100%:** {money(totals['Стоимость'])}")
+                    body = f"<p><b>Заказчик:</b> {escape(client_name)}<br><b>Адрес:</b> {escape(address)}</p>"
+                    body += estimate.to_html(index=False)
+                    body += f"<h2>Итого</h2><p>Материалы: {money(totals['Материалы'])}<br>Производство: {money(totals['Производство'])}<br>Монтаж: {money(totals['Монтаж'])}<br>Доставка: {money(totals['Доставка'])}<br>Себестоимость: {money(totals['Себестоимость'])}<br><b>Итоговая стоимость: {money(totals['Стоимость'])}</b></p>"
+                    body += "<div class='sign'><span>Согласовано: __________________</span><span>Дата: __________________</span></div>"
+                    title = f"Смета объекта — {object_name}"
+
+                else:
+                    planned = float(doc["quantity_needed"].sum())
+                    completed = float(doc["qty_installed"].sum())
+                    remaining = max(planned - completed, 0)
+                    intermediate = remaining > 0
+                    act_title = "Промежуточный акт сдачи-приёмки работ" if intermediate else "Акт сдачи-приёмки работ"
+                    st.subheader(act_title)
+                    st.write(f"Запланировано: **{planned:g} шт.**")
+                    st.write(f"Выполнено: **{completed:g} шт.**")
+                    st.write(f"Остаток: **{remaining:g} шт.**")
+                    view = doc[["item_name", "quantity_needed", "qty_installed"]].copy()
+                    view.columns = ["Изделие", "Запланировано", "Выполнено"]
+                    view["Остаток"] = (view["Запланировано"] - view["Выполнено"]).clip(lower=0)
+                    st.dataframe(view, width="stretch", hide_index=True)
+                    body = f"<h2>{escape(act_title)}</h2><p><b>Объект:</b> {escape(object_name)}<br><b>Заказчик:</b> {escape(client_name)}<br><b>Адрес:</b> {escape(address)}</p>"
+                    body += view.to_html(index=False)
+                    body += f"<p><b>Запланировано:</b> {planned:g} шт.<br><b>Выполнено:</b> {completed:g} шт.<br><b>Остаток:</b> {remaining:g} шт.</p>"
+                    body += "<div class='sign'><span>Заказчик: __________________</span><span>Исполнитель: __________________</span></div>"
+                    title = f"{act_title} — {object_name}"
+
+                st.download_button(
+                    "Скачать документ для печати (HTML)",
+                    data=printable_html(title, body),
+                    file_name=title.replace(" ", "_") + ".html",
+                    mime="text/html",
+                    key="download_object_document"
+                )
+                st.caption("HTML-документ можно открыть в браузере и распечатать или сохранить в PDF через печать браузера.")
+
+        elif document_type == "Выверка по заказчику":
+            clients = report_df["client_name"].fillna("").astype(str).drop_duplicates().sort_values().tolist()
+            if not clients:
+                st.info("Нет заказчиков.")
+            else:
+                selected_client = st.selectbox("Заказчик", clients, key="print_client")
+                doc = report_df[report_df["client_name"].fillna("").astype(str) == selected_client].copy()
+                summary = doc.groupby(["object_id", "object_name"], as_index=False).agg(
+                    Изделий=("quantity_needed", "sum"),
+                    Выполнено=("qty_installed", "sum"),
+                    Материалы=("Материалы", "sum"),
+                    Производство=("Производство", "sum"),
+                    Монтаж=("Монтаж", "sum"),
+                    Доставка=("Доставка", "sum"),
+                    Себестоимость=("Себестоимость", "sum"),
+                    Стоимость=("Цена объекта", "sum"),
+                )
+                st.dataframe(summary, width="stretch", hide_index=True)
+                body = f"<p><b>Заказчик:</b> {escape(selected_client)}</p>" + summary.to_html(index=False)
+                body += "<div class='sign'><span>Представитель заказчика: __________________</span><span>Представитель исполнителя: __________________</span></div>"
+                title = f"Выверка по заказчику — {selected_client}"
+                st.download_button("Скачать документ для печати (HTML)", printable_html(title, body), title.replace(" ", "_") + ".html", "text/html", key="download_client_document")
+
+        else:
+            st.info("Накладные будут связаны непосредственно с движениями склада материалов. Выберите тип накладной — система покажет соответствующее движение для печати.")
+
+    # ========================================================
+    # 3. OPERATIONAL REPORTS
+    # ========================================================
+    elif st.session_state["reports_section"] == "Операционные отчёты":
+        st.subheader("Операционные отчёты")
+        operational = st.selectbox(
+            "Отчёт",
+            [
+                "Карточка объекта",
+                "Отчёт по производству",
+                "Готово, но не отправлено",
+                "Отчёт по доставкам",
+                "Отчёт по монтажу",
+                "Незавершённые объекты",
+            ],
+            key="operational_report"
+        )
+
+        if report_df.empty:
+            st.info("Нет данных.")
+        elif operational == "Карточка объекта":
+            options = [f"{int(r['object_id'])} — {r['object_name']}" for _, r in report_df[["object_id","object_name"]].drop_duplicates().iterrows()]
+            selected = st.selectbox("Объект", options, key="operational_object")
+            oid = int(selected.split(" — ")[0])
+            card = report_df[report_df["object_id"] == oid]
+            st.dataframe(card[["item_name","quantity_needed","qty_installed","qty_ready","qty_shipped","qty_arrived"]].rename(columns={"item_name":"Изделие","quantity_needed":"Запланировано","qty_installed":"Установлено","qty_ready":"Готово","qty_shipped":"Отправлено","qty_arrived":"Доставлено"}), width="stretch", hide_index=True)
+        elif operational == "Отчёт по производству":
+            st.dataframe(report_df.groupby(["object_name","client_name"], as_index=False).agg(Заказано=("quantity_needed","sum"), Готово=("qty_ready","sum"), Доставлено=("qty_arrived","sum"), Установлено=("qty_installed","sum")), width="stretch", hide_index=True)
+        elif operational == "Готово, но не отправлено":
+            st.dataframe(report_df[report_df["qty_ready"] > report_df["qty_shipped"]][["object_name","client_name","item_name","qty_ready","qty_shipped"]].rename(columns={"object_name":"Объект","client_name":"Заказчик","item_name":"Изделие","qty_ready":"Готово","qty_shipped":"Отправлено"}), width="stretch", hide_index=True)
+        elif operational == "Отчёт по доставкам":
+            st.dataframe(report_df[["object_name","client_name","item_name","qty_shipped","qty_arrived"]].rename(columns={"object_name":"Объект","client_name":"Заказчик","item_name":"Изделие","qty_shipped":"Отправлено","qty_arrived":"Доставлено"}), width="stretch", hide_index=True)
+        elif operational == "Отчёт по монтажу":
+            st.dataframe(report_df[["object_name","client_name","item_name","quantity_needed","qty_installed"]].rename(columns={"object_name":"Объект","client_name":"Заказчик","item_name":"Изделие","quantity_needed":"Запланировано","qty_installed":"Установлено"}), width="stretch", hide_index=True)
+        else:
+            incomplete = report_df[report_df["qty_installed"] < report_df["quantity_needed"]]
+            st.dataframe(incomplete.groupby(["object_id","object_name","client_name"], as_index=False).agg(Запланировано=("quantity_needed","sum"), Выполнено=("qty_installed","sum"), Остаток=("Остаток","sum")), width="stretch", hide_index=True)
+
+    # ========================================================
+    # 4. STOCK REPORTS
+    # ========================================================
+    else:
+        st.subheader("Складские отчёты")
+        stock_report = st.selectbox(
+            "Отчёт",
+            ["Остатки материалов", "Материалы с низким остатком", "Потребность материалов по незавершённым объектам"],
+            key="stock_report"
+        )
+        stock = run_query("""
+            SELECT m.id, m.name AS material, u.name AS unit,
+                   COALESCE(m.stock_quantity,0) AS stock_quantity,
+                   COALESCE(m.cost_per_unit,0) AS cost_per_unit,
+                   COALESCE(m.stock_quantity,0)*COALESCE(m.cost_per_unit,0) AS stock_value
+            FROM reklet.materials m
+            LEFT JOIN reklet.units u ON u.id=m.unit_id
+            ORDER BY m.name
+        """, fetch=True)
+        if stock_report == "Остатки материалов":
+            st.dataframe(stock.rename(columns={"material":"Материал","unit":"Единица","stock_quantity":"Остаток","cost_per_unit":"Цена","stock_value":"Стоимость остатка"}), width="stretch", hide_index=True)
+        elif stock_report == "Материалы с низким остатком":
+            low = stock[stock["stock_quantity"] <= 10].copy()
+            st.dataframe(low.rename(columns={"material":"Материал","unit":"Единица","stock_quantity":"Остаток","cost_per_unit":"Цена","stock_value":"Стоимость остатка"}), width="stretch", hide_index=True)
+        else:
+            need = run_query("""
+                SELECT o.object_name, c.name AS client_name, oi.item_name,
+                       m.name AS material,
+                       (oi.quantity_needed * ptm.quantity_per_unit * COALESCE(ptm.waste_coefficient,1)) AS required_quantity,
+                       COALESCE(m.stock_quantity,0) AS stock_quantity
+                FROM reklet.object_items oi
+                JOIN reklet.objects o ON o.id=oi.object_id
+                LEFT JOIN reklet.clients c ON c.id=o.client_id
+                JOIN reklet.product_template_materials ptm ON ptm.product_template_id=oi.product_template_id
+                JOIN reklet.materials m ON m.id=ptm.material_id
+                WHERE COALESCE(oi.qty_installed,0) < COALESCE(oi.quantity_needed,0)
+                ORDER BY o.object_name, oi.item_name, m.name
+            """, fetch=True)
+            st.dataframe(need.rename(columns={"object_name":"Объект","client_name":"Заказчик","item_name":"Изделие","material":"Материал","required_quantity":"Требуется","stock_quantity":"На складе"}), width="stretch", hide_index=True)
+
+
 
     archive_query = """
         SELECT
