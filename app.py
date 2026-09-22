@@ -3963,15 +3963,19 @@ elif menu == "Готовая продукция":
                     action = "arrive"
                     label = "Отметить как доставленное"
 
-                qty = st.number_input(
-                    "Количество",
-                    min_value=1,
-                    max_value=current_qty,
-                    value=1,
-                    key="finished_goods_action_qty"
-                )
+                if current_qty <= 0:
+                    st.info("Доступного количества для этого действия сейчас нет.")
+                    qty = 0
+                else:
+                    qty = st.number_input(
+                        "Количество",
+                        min_value=1,
+                        max_value=current_qty,
+                        value=1,
+                        key="finished_goods_action_qty"
+                    )
 
-                if st.button(
+                if current_qty > 0 and st.button(
                     label,
                     key="finished_goods_action_button"
                 ):
@@ -4657,60 +4661,110 @@ elif menu == "Монтаж":
 
 elif menu == "Зарплата":
 
-    st.header(
-        "Зарплата"
-    )
+    st.header("Зарплата")
 
-    df = run_query(
+    if "payroll_section" not in st.session_state:
+        st.session_state.payroll_section = "Производство"
+
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        if st.button("Зарплата производства", key="payroll_production_btn", width="stretch"):
+            st.session_state.payroll_section = "Производство"
+    with b2:
+        if st.button("Зарплата транспортировки", key="payroll_transport_btn", width="stretch"):
+            st.session_state.payroll_section = "Транспортировка"
+    with b3:
+        if st.button("Зарплата монтажа", key="payroll_install_btn", width="stretch"):
+            st.session_state.payroll_section = "Монтаж"
+    with b4:
+        if st.button("Сводка по зарплате", key="payroll_summary_btn", width="stretch"):
+            st.session_state.payroll_section = "Сводка"
+
+    st.markdown("---")
+
+    # Себестоимость материалов одного элемента.
+    payroll_items = run_query(
         """
         SELECT
-
-            pr.id,
-
+            oi.id AS object_item_id,
+            oi.object_id,
             o.object_name,
-
+            COALESCE(c.name, '') AS client_name,
             oi.item_name,
-
-            pr.department,
-
-            pr.base_material_cost,
-
-            pr.calculated_amount,
-
-            pr.manual_override_amount,
-
-            pr.is_manual,
-
-            pr.updated_at
-
-        FROM
-            reklet.payroll_records pr
-
-        LEFT JOIN reklet.object_items oi
-            ON oi.id = pr.object_item_id
-
-        LEFT JOIN reklet.objects o
-            ON o.id = oi.object_id
-
-        ORDER BY
-            pr.updated_at DESC
+            COALESCE(oi.quantity_needed, 0) AS quantity_needed,
+            COALESCE(oi.qty_ready, 0) + COALESCE(oi.qty_shipped, 0) +
+            COALESCE(oi.qty_arrived, 0) + COALESCE(oi.qty_installing, 0) +
+            COALESCE(oi.qty_installed, 0) AS produced_quantity,
+            COALESCE(oi.qty_installed, 0) AS installed_quantity,
+            COALESCE(oi.qty_shipped, 0) + COALESCE(oi.qty_arrived, 0) +
+            COALESCE(oi.qty_installing, 0) + COALESCE(oi.qty_installed, 0) AS transported_quantity,
+            COALESCE(o.transport_distance_km, 0) AS distance_km,
+            COALESCE(o.delivery_cost, 0) AS stored_delivery_cost,
+            COALESCE(SUM(
+                ptm.quantity_per_unit *
+                COALESCE(ptm.waste_coefficient, m.default_waste_coefficient, 1) *
+                COALESCE(m.cost_per_unit, 0)
+            ), 0) AS material_cost_per_unit
+        FROM reklet.object_items oi
+        JOIN reklet.objects o ON o.id = oi.object_id
+        LEFT JOIN reklet.clients c ON c.id = o.client_id
+        LEFT JOIN reklet.product_templates pt
+            ON pt.id = COALESCE(oi.product_template_id, oi.template_id)
+        LEFT JOIN reklet.product_template_materials ptm
+            ON ptm.product_template_id = pt.id
+        LEFT JOIN reklet.materials m
+            ON m.id = ptm.material_id
+        GROUP BY
+            oi.id, oi.object_id, o.object_name, c.name, oi.item_name,
+            oi.quantity_needed, oi.qty_ready, oi.qty_shipped, oi.qty_arrived,
+            oi.qty_installing, oi.qty_installed, o.transport_distance_km, o.delivery_cost
+        ORDER BY o.object_name, oi.item_name
         """,
         fetch=True
     )
 
-    if df.empty:
-
-        st.info(
-            "Нет записей по зарплате."
-        )
-
+    if payroll_items.empty:
+        st.info("Нет элементов для расчёта зарплаты.")
     else:
+        if st.session_state.payroll_section == "Производство":
+            view = payroll_items.copy()
+            view["Себестоимость материалов"] = view["material_cost_per_unit"]
+            view["Количество"] = view["produced_quantity"]
+            view["Зарплата производства"] = view["material_cost_per_unit"] * view["produced_quantity"] * 1.50
+            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
+            st.caption("Зарплата производства = себестоимость материалов × количество произведённых элементов × 1,50 (+50%).")
+            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата производства"]], width="stretch", hide_index=True)
 
-        st.dataframe(
-            df,
-            width="stretch",
-            hide_index=True
-        )
+        elif st.session_state.payroll_section == "Монтаж":
+            view = payroll_items.copy()
+            view["Себестоимость материалов"] = view["material_cost_per_unit"]
+            view["Количество"] = view["installed_quantity"]
+            view["Зарплата монтажа"] = view["material_cost_per_unit"] * view["installed_quantity"] * 1.40
+            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
+            st.caption("Зарплата монтажа = себестоимость материалов × количество установленных элементов × 1,40 (+40%).")
+            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата монтажа"]], width="stretch", hide_index=True)
+
+        elif st.session_state.payroll_section == "Транспортировка":
+            view = payroll_items.copy()
+            view["Себестоимость материалов"] = view["material_cost_per_unit"] * view["transported_quantity"]
+            view["Количество"] = view["transported_quantity"]
+            view["Зарплата транспортировки"] = view["Себестоимость материалов"] * 0.10 + view["distance_km"] * 2
+            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие", "distance_km":"Расстояние, км"})
+            st.caption("Доставка = 10% от себестоимости материалов перевезённых элементов + расстояние × 2 условные единицы.")
+            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Расстояние, км", "Зарплата транспортировки"]], width="stretch", hide_index=True)
+
+        else:
+            view = payroll_items.copy()
+            view["Производство"] = view["material_cost_per_unit"] * view["produced_quantity"] * 1.50
+            view["Монтаж"] = view["material_cost_per_unit"] * view["installed_quantity"] * 1.40
+            view["Доставка"] = (view["material_cost_per_unit"] * view["transported_quantity"] * 0.10) + view["distance_km"] * 2
+            view["Итого"] = view["Производство"] + view["Монтаж"] + view["Доставка"]
+            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
+            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Производство", "Монтаж", "Доставка", "Итого"]], width="stretch", hide_index=True)
+
+            summary = view.groupby(["Объект", "Заказчик"], as_index=False)[["Производство", "Монтаж", "Доставка", "Итого"]].sum()
+            st.subheader("Сводка по объектам")
+            st.dataframe(summary, width="stretch", hide_index=True)
 
 
 # ============================================================
