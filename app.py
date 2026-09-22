@@ -4855,6 +4855,24 @@ elif menu == "Зарплата":
     if payroll_items.empty:
         st.info("Нет элементов для расчёта зарплаты.")
     else:
+        # Отбор по объекту применяется ко всем четырём разделам зарплаты.
+        payroll_object_options = ["Все объекты"] + [
+            f"{int(row['object_id'])} — {row['object_name']}"
+            for _, row in payroll_items[["object_id", "object_name"]].drop_duplicates().iterrows()
+        ]
+        payroll_object_filter = st.selectbox(
+            "Отбор по объекту",
+            payroll_object_options,
+            key=f"payroll_object_filter_{st.session_state.payroll_section}"
+        )
+        if payroll_object_filter != "Все объекты":
+            payroll_object_id = int(payroll_object_filter.split(" — ")[0])
+            payroll_items = payroll_items[payroll_items["object_id"] == payroll_object_id].copy()
+
+        if payroll_items.empty:
+            st.info("По выбранному объекту данных для расчёта зарплаты нет.")
+            st.stop()
+
         # PostgreSQL numeric/Decimal values and nullable quantities are normalized
         # before arithmetic so Pandas never tries to multiply strings by numbers.
         numeric_cols = [
@@ -5371,6 +5389,24 @@ elif menu == "Зарплата":
     if payroll_items.empty:
         st.info("Нет элементов для расчёта зарплаты.")
     else:
+        # Отбор по объекту применяется ко всем четырём разделам зарплаты.
+        payroll_object_options = ["Все объекты"] + [
+            f"{int(row['object_id'])} — {row['object_name']}"
+            for _, row in payroll_items[["object_id", "object_name"]].drop_duplicates().iterrows()
+        ]
+        payroll_object_filter = st.selectbox(
+            "Отбор по объекту",
+            payroll_object_options,
+            key=f"payroll_object_filter_{st.session_state.payroll_section}"
+        )
+        if payroll_object_filter != "Все объекты":
+            payroll_object_id = int(payroll_object_filter.split(" — ")[0])
+            payroll_items = payroll_items[payroll_items["object_id"] == payroll_object_id].copy()
+
+        if payroll_items.empty:
+            st.info("По выбранному объекту данных для расчёта зарплаты нет.")
+            st.stop()
+
         # PostgreSQL numeric/Decimal values and nullable quantities are normalized
         # before arithmetic so Pandas never tries to multiply strings by numbers.
         numeric_cols = [
