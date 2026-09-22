@@ -16,104 +16,6 @@ st.set_page_config(
 
 
 # ============================================================
-# UI STYLE — UNIFIED RECTANGULAR BUTTONS
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-    /* Reklet: one static rectangular button style everywhere.
-       No rounded corners, no hover/active color changes, no animation. */
-    div.stButton > button,
-    div.stButton > button:hover,
-    div.stButton > button:focus,
-    div.stButton > button:focus-visible,
-    div.stButton > button:active,
-    div[data-testid="stFormSubmitButton"] > button,
-    div[data-testid="stFormSubmitButton"] > button:hover,
-    div[data-testid="stFormSubmitButton"] > button:focus,
-    div[data-testid="stFormSubmitButton"] > button:focus-visible,
-    div[data-testid="stFormSubmitButton"] > button:active,
-    div[data-testid="stDownloadButton"] > button,
-    div[data-testid="stDownloadButton"] > button:hover,
-    div[data-testid="stDownloadButton"] > button:focus,
-    div[data-testid="stDownloadButton"] > button:focus-visible,
-    div[data-testid="stDownloadButton"] > button:active {
-        border-radius: 0 !important;
-        background: transparent !important;
-        color: #f0f0f0 !important;
-        border: 1px solid #4b4f56 !important;
-        box-shadow: none !important;
-        outline: none !important;
-        transform: none !important;
-        transition: none !important;
-        animation: none !important;
-        min-height: 38px !important;
-    }
-
-    /* Remove Streamlit's radio circles and make horizontal navigation
-       look exactly like simple rectangular text buttons. */
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] {
-        gap: 6px !important;
-        flex-wrap: wrap !important;
-    }
-
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label,
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:hover,
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:focus,
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:active,
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:has(input:checked) {
-        border: 1px solid #4b4f56 !important;
-        border-radius: 0 !important;
-        padding: 7px 14px !important;
-        margin: 0 !important;
-        background: transparent !important;
-        color: #f0f0f0 !important;
-        box-shadow: none !important;
-        outline: none !important;
-        transform: none !important;
-        transition: none !important;
-        animation: none !important;
-        cursor: pointer !important;
-    }
-
-    /* Hide the circular radio indicator completely. */
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label > div:first-child {
-        display: none !important;
-    }
-
-    /* The active/selected item is intentionally identical to every other item. */
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label:has(input:checked) *,
-    div[data-testid="stRadio"] div[role="radiogroup"][aria-orientation="horizontal"] label * {
-        color: #f0f0f0 !important;
-        transition: none !important;
-        animation: none !important;
-    }
-
-    /* Disable all UI motion inside these controls. */
-    div.stButton *,
-    div[data-testid="stFormSubmitButton"] *,
-    div[data-testid="stDownloadButton"] *,
-    div[data-testid="stRadio"] * {
-        transition: none !important;
-        animation: none !important;
-    }
-
-    @media (max-width: 900px) {
-        div.stButton > button,
-        div[data-testid="stFormSubmitButton"] > button,
-        div[data-testid="stDownloadButton"] > button {
-            min-height: 36px !important;
-            padding: 0.3rem 0.7rem !important;
-        }
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
 # DATABASE CONFIGURATION
 # ============================================================
 
@@ -3417,152 +3319,118 @@ elif menu == "Поставщики":
 
 elif menu == "Производство":
 
-    st.header(
-        "Производство"
-    )
+    st.header("Производство")
 
     objects = get_objects()
 
     if objects.empty:
-
-        st.info(
-            "Нет объектов."
-        )
-
+        st.info("Нет объектов.")
     else:
-
+        # Отбор находится перед перечнем — сначала выбираем объект,
+        # затем видим только изделия, которые еще нужно изготовить.
         object_filter = st.selectbox(
-            "Объект",
+            "Отбор по объекту",
             ["Все объекты"]
             + [
-                f"{row['id']} — "
-                f"{row['object_name']}"
-
+                f"{row['id']} — {row['object_name']}"
                 for _, row in objects.iterrows()
-            ]
+            ],
+            key="production_object_filter"
         )
 
         query = """
         SELECT
-
             oi.id,
-
+            oi.object_id,
             o.object_name,
-
             c.name AS client_name,
-
             oi.item_name,
-
             oi.quantity_needed,
-
-            oi.qty_new,
-
-            oi.qty_production,
-
-            oi.qty_ready,
-
-            oi.qty_shipped,
-
-            oi.qty_arrived,
-
-            oi.qty_installing,
-
-            oi.qty_installed,
-
-            (
-                oi.quantity_needed
-                -
-                oi.qty_installed
-            ) AS remaining
-
+            COALESCE(oi.qty_new, 0) AS qty_new,
+            COALESCE(oi.qty_production, 0) AS qty_production,
+            COALESCE(oi.qty_ready, 0) AS qty_ready,
+            COALESCE(oi.qty_shipped, 0) AS qty_shipped,
+            COALESCE(oi.qty_arrived, 0) AS qty_arrived,
+            COALESCE(oi.qty_installing, 0) AS qty_installing,
+            COALESCE(oi.qty_installed, 0) AS qty_installed,
+            CASE
+                WHEN COALESCE(oi.qty_new, 0) > 0
+                    THEN COALESCE(oi.qty_new, 0)
+                ELSE COALESCE(oi.qty_production, 0)
+            END AS action_quantity
         FROM reklet.object_items oi
-
         JOIN reklet.objects o
             ON o.id = oi.object_id
-
         LEFT JOIN reklet.clients c
             ON c.id = o.client_id
-
         WHERE
-            (
-                oi.qty_new > 0
-                OR oi.qty_production > 0
-            )
+            COALESCE(oi.qty_new, 0) > 0
+            OR COALESCE(oi.qty_production, 0) > 0
         """
 
         params = []
 
         if object_filter != "Все объекты":
+            object_id = int(object_filter.split(" — ")[0])
+            query += " AND oi.object_id = %s"
+            params.append(object_id)
 
-            object_id = int(
-                object_filter.split(
-                    " — "
-                )[0]
-            )
+        query += " ORDER BY o.object_name, oi.item_name"
 
-            query += """
-                AND oi.object_id = %s
-            """
-
-            params.append(
-                object_id
-            )
-
-        query += """
-        ORDER BY
-            o.object_name,
-            oi.item_name
-        """
-
-        df = run_query(
-            query,
-            tuple(params),
-            fetch=True
-        )
+        df = run_query(query, tuple(params), fetch=True)
 
         if df.empty:
-
-            st.success(
-                "Нет изделий, ожидающих производства."
-            )
-
+            st.success("Все изделия по выбранному отбору уже изготовлены и переданы в готовую продукцию.")
         else:
+            display = df[
+                [
+                    "id",
+                    "object_name",
+                    "client_name",
+                    "item_name",
+                    "quantity_needed",
+                    "qty_new",
+                    "qty_production",
+                    "qty_ready",
+                    "action_quantity"
+                ]
+            ].copy()
 
-            production_view = df.copy()
+            display.columns = [
+                "№",
+                "Объект",
+                "Заказчик",
+                "Изделие",
+                "Заказано",
+                "Осталось запустить",
+                "В производстве",
+                "Передано в готовую продукцию",
+                "Количество для следующего действия"
+            ]
+
+            st.subheader("Перечень")
             st.dataframe(
-                production_view,
+                display,
                 width="stretch",
                 hide_index=True
             )
 
             st.markdown("---")
-
-            st.subheader(
-                "Действие производства"
-            )
+            st.subheader("Действие производства")
 
             item_map = {
-
-                f"{row['id']} — "
-                f"{row['object_name']} — "
-                f"{row['item_name']}":
-                    int(row["id"])
-
+                f"{int(row['id'])} — {row['object_name']} — {row['item_name']}": int(row['id'])
                 for _, row in df.iterrows()
             }
 
             selected_item = st.selectbox(
                 "Изделие",
-                list(item_map.keys())
+                list(item_map.keys()),
+                key="production_item"
             )
 
-            item_id = item_map[
-                selected_item
-            ]
-
-            item_row = df[
-                df["id"] == item_id
-            ].iloc[0]
+            item_id = item_map[selected_item]
+            item_row = df[df["id"] == item_id].iloc[0]
 
             action = st.radio(
                 "Действие",
@@ -3570,196 +3438,257 @@ elif menu == "Производство":
                     "Запустить производство",
                     "Переместить в готовую продукцию"
                 ],
-                horizontal=True
+                horizontal=True,
+                key="production_action"
             )
 
-            max_qty = (
+            if action == "Запустить производство":
+                max_qty = safe_int(item_row["qty_new"])
+            else:
+                max_qty = safe_int(item_row["qty_production"])
 
-                safe_int(
-                    item_row["qty_new"]
+            if max_qty > 0:
+                action_qty = st.number_input(
+                    "Количество",
+                    min_value=1,
+                    max_value=max_qty,
+                    value=min(1, max_qty),
+                    step=1,
+                    key="production_action_quantity"
                 )
 
-                if action == "Запустить производство"
-
-                else
-
-                safe_int(
-                    item_row["qty_production"]
-                )
-            )
-
-            action_qty = st.number_input(
-                "Количество",
-                min_value=1,
-                max_value=(
-                    max_qty
-                    if max_qty > 0
-                    else 1
-                ),
-                value=1
-            )
-
-            if st.button(
-                "Выполнить действие производства"
-            ):
-
-                if action == "Запустить производство":
-
-                    run_query(
-                        """
-                        UPDATE
-                            reklet.object_items
-
-                        SET
-
-                            qty_new =
-                                qty_new - %s,
-
-                            qty_production =
-                                qty_production + %s,
-
-                            production_status =
-                                'in_progress',
-
-                            production_progress_pct =
-
-                                CASE
-
-                                    WHEN quantity_needed > 0
-
-                                    THEN LEAST(
-                                        100,
-                                        ROUND(
-                                            (
-                                                qty_production
-                                                + %s
-                                            )::numeric
-                                            /
-                                            quantity_needed
-                                            * 100
-                                        )
-                                    )
-
-                                    ELSE 0
-
-                                END
-
-                        WHERE id = %s
-                        """,
-                        (
-                            action_qty,
-                            action_qty,
-                            action_qty,
-                            item_id
-                        )
-                    )
-
-                else:
-
-                    run_query(
-                        """
-                        UPDATE
-                            reklet.object_items
-
-                        SET
-
-                            qty_production =
-                                qty_production - %s,
-
-                            qty_ready =
-                                qty_ready + %s,
-
-                            production_status =
-
-                                CASE
-
-                                    WHEN
-                                        qty_production - %s <= 0
-
-                                    THEN 'completed'
-
-                                    ELSE 'in_progress'
-
-                                END,
-
-                            production_progress_pct =
-
-                                CASE
-
-                                    WHEN quantity_needed > 0
-
-                                    THEN LEAST(
-                                        100,
-                                        ROUND(
-                                            (
-                                                quantity_needed
-                                                -
-                                                qty_new
-                                                -
+                if st.button(
+                    "Исполнить",
+                    key="execute_production_action"
+                ):
+                    if action == "Запустить производство":
+                        run_query(
+                            """
+                            UPDATE reklet.object_items
+                            SET
+                                qty_new = COALESCE(qty_new, 0) - %s,
+                                qty_production = COALESCE(qty_production, 0) + %s,
+                                production_status = 'in_progress',
+                                production_progress_pct =
+                                    CASE
+                                        WHEN quantity_needed > 0 THEN LEAST(
+                                            100,
+                                            ROUND(
                                                 (
-                                                    qty_production
-                                                    - %s
-                                                )
-                                            )::numeric
-                                            /
-                                            quantity_needed
-                                            * 100
+                                                    COALESCE(qty_production, 0) + %s
+                                                )::numeric
+                                                / quantity_needed * 100
+                                            )
                                         )
-                                    )
-
-                                    ELSE 0
-
-                                END
-
-                        WHERE id = %s
-                        """,
-                        (
-                            action_qty,
-                            action_qty,
-                            action_qty,
-                            action_qty,
-                            item_id
+                                        ELSE 0
+                                    END
+                            WHERE id = %s
+                            """,
+                            (action_qty, action_qty, action_qty, item_id)
                         )
-                    )
-
-                    run_query(
-                        """
-                        INSERT INTO
-                            reklet.finished_goods
-                        (
-                            object_item_id,
-                            object_id,
-                            quantity,
-                            status
+                    else:
+                        # Частичная передача разрешена. После передачи только
+                        # фактически переданное количество уходит в готовую продукцию.
+                        run_query(
+                            """
+                            UPDATE reklet.object_items
+                            SET
+                                qty_production = COALESCE(qty_production, 0) - %s,
+                                qty_ready = COALESCE(qty_ready, 0) + %s,
+                                production_status =
+                                    CASE
+                                        WHEN COALESCE(qty_production, 0) - %s <= 0
+                                             AND COALESCE(qty_new, 0) <= 0
+                                            THEN 'completed'
+                                        ELSE 'in_progress'
+                                    END,
+                                production_progress_pct =
+                                    CASE
+                                        WHEN quantity_needed > 0 THEN LEAST(
+                                            100,
+                                            ROUND(
+                                                (
+                                                    quantity_needed
+                                                    - COALESCE(qty_new, 0)
+                                                    - (
+                                                        COALESCE(qty_production, 0) - %s
+                                                    )
+                                                )::numeric
+                                                / quantity_needed * 100
+                                            )
+                                        )
+                                        ELSE 0
+                                    END
+                            WHERE id = %s
+                            """,
+                            (action_qty, action_qty, action_qty, action_qty, item_id)
                         )
 
-                        SELECT
-
-                            id,
-
-                            object_id,
-
-                            %s,
-
-                            'ready'
-
-                        FROM
-                            reklet.object_items
-
-                        WHERE id = %s
-                        """,
-                        (
-                            action_qty,
-                            item_id
+                        # Отдельная запись движения: именно она формирует
+                        # историю того, что реально поступило на склад готовой продукции.
+                        run_query(
+                            """
+                            INSERT INTO reklet.finished_goods
+                            (
+                                object_item_id,
+                                object_id,
+                                quantity,
+                                status
+                            )
+                            SELECT
+                                id,
+                                object_id,
+                                %s,
+                                'ready'
+                            FROM reklet.object_items
+                            WHERE id = %s
+                            """,
+                            (action_qty, item_id)
                         )
-                    )
 
-                st.success(
-                    "Производство обновлено."
-                )
+                        run_query(
+                            """
+                            INSERT INTO reklet.finished_goods_transactions
+                            (
+                                object_item_id,
+                                object_id,
+                                operation_type,
+                                quantity
+                            )
+                            SELECT
+                                id,
+                                object_id,
+                                'ready',
+                                %s
+                            FROM reklet.object_items
+                            WHERE id = %s
+                            """,
+                            (action_qty, item_id)
+                        )
 
-                st.rerun()
+                    st.success("Производство обновлено.")
+                    st.rerun()
+            else:
+                st.info("Для выбранного действия сейчас нет доступного количества.")
 
+        # ========================================================
+        # PRODUCTION MOVEMENT HISTORY
+        # ========================================================
+
+        st.markdown("---")
+        st.subheader("Движения по производству")
+
+        movement_objects = run_query(
+            """
+            SELECT DISTINCT
+                o.id,
+                o.object_name
+            FROM reklet.finished_goods_transactions fgt
+            JOIN reklet.objects o
+                ON o.id = fgt.object_id
+            WHERE fgt.operation_type = 'ready'
+            ORDER BY o.object_name
+            """,
+            fetch=True
+        )
+
+        movement_clients = run_query(
+            """
+            SELECT DISTINCT
+                c.id,
+                c.name
+            FROM reklet.finished_goods_transactions fgt
+            JOIN reklet.objects o
+                ON o.id = fgt.object_id
+            JOIN reklet.clients c
+                ON c.id = o.client_id
+            WHERE fgt.operation_type = 'ready'
+            ORDER BY c.name
+            """,
+            fetch=True
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            movement_object_options = ["Все объекты"] + [
+                f"{int(row['id'])} — {row['object_name']}"
+                for _, row in movement_objects.iterrows()
+            ]
+            movement_object_filter = st.selectbox(
+                "Отбор по объекту",
+                movement_object_options,
+                key="production_movement_object_filter"
+            )
+
+        with col2:
+            movement_client_options = ["Все заказчики"] + [
+                f"{int(row['id'])} — {row['name']}"
+                for _, row in movement_clients.iterrows()
+            ]
+            movement_client_filter = st.selectbox(
+                "Отбор по заказчику",
+                movement_client_options,
+                key="production_movement_client_filter"
+            )
+
+        movement_query = """
+            SELECT
+                fgt.id,
+                o.object_name AS object_name,
+                c.name AS client_name,
+                oi.item_name AS product_name,
+                fgt.quantity,
+                fgt.created_at
+            FROM reklet.finished_goods_transactions fgt
+            JOIN reklet.object_items oi
+                ON oi.id = fgt.object_item_id
+            LEFT JOIN reklet.objects o
+                ON o.id = fgt.object_id
+            LEFT JOIN reklet.clients c
+                ON c.id = o.client_id
+            WHERE fgt.operation_type = 'ready'
+        """
+
+        movement_params = []
+
+        if movement_object_filter != "Все объекты":
+            movement_query += " AND fgt.object_id = %s"
+            movement_params.append(
+                int(movement_object_filter.split(" — ")[0])
+            )
+
+        if movement_client_filter != "Все заказчики":
+            movement_query += " AND o.client_id = %s"
+            movement_params.append(
+                int(movement_client_filter.split(" — ")[0])
+            )
+
+        movement_query += " ORDER BY fgt.created_at DESC, fgt.id DESC"
+
+        movements = run_query(
+            movement_query,
+            tuple(movement_params),
+            fetch=True
+        )
+
+        if movements.empty:
+            st.info("Движений на склад готовой продукции пока нет.")
+        else:
+            movements = movements.copy()
+            movements.columns = [
+                "№",
+                "Объект",
+                "Заказчик",
+                "Изделие",
+                "Количество",
+                "Когда передано"
+            ]
+            st.dataframe(
+                movements,
+                width="stretch",
+                hide_index=True
+            )
 
 # ============================================================
 # FINISHED GOODS
