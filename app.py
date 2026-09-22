@@ -3963,6 +3963,8 @@ elif menu == "Готовая продукция":
                     action = "arrive"
                     label = "Отметить как доставленное"
 
+                current_qty = max(safe_int(current_qty), 0)
+
                 if current_qty <= 0:
                     st.info("Доступного количества для этого действия сейчас нет.")
                     qty = 0
@@ -3972,6 +3974,7 @@ elif menu == "Готовая продукция":
                         min_value=1,
                         max_value=current_qty,
                         value=1,
+                        step=1,
                         key="finished_goods_action_qty"
                     )
 
@@ -4391,6 +4394,74 @@ elif menu == "Транспорт и логистика":
                 ]]
                 st.dataframe(detail_view, width="stretch", hide_index=True)
 
+                st.markdown("---")
+                st.subheader("Передача на монтаж")
+
+                transport_item_map = {
+                    f"{int(row['id'])} — {row['item_name']} — доступно для доставки: "
+                    f"{max(safe_int(row['shipped']) - safe_int(row['arrived']), 0)} шт.": int(row['id'])
+                    for _, row in detail.iterrows()
+                }
+
+                selected_transport_item = st.selectbox(
+                    "Изделие",
+                    list(transport_item_map.keys()),
+                    key="transport_action_item"
+                )
+                transport_item_id = transport_item_map[selected_transport_item]
+                transport_row = detail[detail["id"] == transport_item_id].iloc[0]
+
+                available_to_deliver = max(
+                    safe_int(transport_row["shipped"]) - safe_int(transport_row["arrived"]),
+                    0
+                )
+
+                st.write(
+                    f"Отправлено: {safe_int(transport_row['shipped'])} шт. | "
+                    f"Доставлено на объект: {safe_int(transport_row['arrived'])} шт."
+                )
+                st.caption(
+                    f"Максимально можно передать на монтаж сейчас: {available_to_deliver} шт."
+                )
+
+                if available_to_deliver > 0:
+                    transport_qty = st.number_input(
+                        "Количество для доставки",
+                        min_value=1,
+                        max_value=available_to_deliver,
+                        value=1,
+                        step=1,
+                        key="transport_action_qty"
+                    )
+
+                    if st.button("Доставить на объект", key="transport_action_button"):
+                        run_query(
+                            """
+                            UPDATE reklet.object_items
+                            SET
+                                qty_shipped = GREATEST(COALESCE(qty_shipped, 0) - %s, 0),
+                                qty_arrived = COALESCE(qty_arrived, 0) + %s
+                            WHERE id = %s
+                            """,
+                            (transport_qty, transport_qty, transport_item_id)
+                        )
+
+                        run_query(
+                            """
+                            INSERT INTO reklet.finished_goods_transactions
+                            (object_item_id, object_id, operation_type, quantity)
+                            SELECT id, object_id, 'arrive', %s
+                            FROM reklet.object_items
+                            WHERE id = %s
+                            """,
+                            (transport_qty, transport_item_id)
+                        )
+
+                        st.success("Изделие передано на объект и теперь доступно для монтажа.")
+                        st.rerun()
+                else:
+                    st.info("Нет отправленных изделий, ожидающих доставки на объект.")
+
 # ============================================================
 # INSTALLATION
 # ============================================================
@@ -4726,6 +4797,22 @@ elif menu == "Зарплата":
     if payroll_items.empty:
         st.info("Нет элементов для расчёта зарплаты.")
     else:
+        # PostgreSQL numeric/Decimal values and nullable quantities are normalized
+        # before arithmetic so Pandas never tries to multiply strings by numbers.
+        numeric_cols = [
+            "material_cost_per_unit",
+            "produced_quantity",
+            "installed_quantity",
+            "transported_quantity",
+            "distance_km",
+            "quantity_needed"
+        ]
+        for col in numeric_cols:
+            if col in payroll_items.columns:
+                payroll_items[col] = pd.to_numeric(
+                    payroll_items[col], errors="coerce"
+                ).fillna(0.0)
+
         if st.session_state.payroll_section == "Производство":
             view = payroll_items.copy()
             view["Себестоимость материалов"] = view["material_cost_per_unit"]
