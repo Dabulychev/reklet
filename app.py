@@ -3364,8 +3364,10 @@ elif menu == "Производство":
         LEFT JOIN reklet.clients c
             ON c.id = o.client_id
         WHERE
-            COALESCE(oi.qty_new, 0) > 0
-            OR COALESCE(oi.qty_production, 0) > 0
+            (
+                COALESCE(oi.qty_new, 0) > 0
+                OR COALESCE(oi.qty_production, 0) > 0
+            )
         """
 
         params = []
