@@ -725,6 +725,53 @@ def get_object_items(object_id):
 
 
 # ============================================================
+# SIMPLE RECTANGULAR NAVIGATION / BUTTON STYLE
+# ============================================================
+st.markdown("""
+<style>
+/* All Streamlit buttons: simple rectangular, text only, no pill/circle styling. */
+.stButton > button {
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    transition: none !important;
+    animation: none !important;
+    min-height: 38px !important;
+    padding: 0.35rem 0.75rem !important;
+    font-weight: 400 !important;
+}
+.stButton > button:hover,
+.stButton > button:focus,
+.stButton > button:active {
+    box-shadow: none !important;
+    transition: none !important;
+    animation: none !important;
+}
+/* Horizontal radio navigation is rendered as rectangular text buttons. */
+[data-testid="stRadio"] > div[role="radiogroup"] {
+    gap: 0 !important;
+    flex-wrap: wrap !important;
+}
+[data-testid="stRadio"] > div[role="radiogroup"] > label {
+    border: 1px solid #bdbdbd !important;
+    border-radius: 0 !important;
+    padding: 0.35rem 0.75rem !important;
+    margin: 0 -1px 0 0 !important;
+    background: white !important;
+    transition: none !important;
+    animation: none !important;
+}
+[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+    display: none !important;
+}
+[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) {
+    background: #eeeeee !important;
+    color: #111 !important;
+    box-shadow: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
 # NAVIGATION
 # ============================================================
 
@@ -2095,11 +2142,7 @@ elif menu == "Изделия":
 
     elif product_sub == "Добавить изделие":
         st.subheader("Добавить изделие")
-        st.selectbox(
-            "Отбор по заказчику-изделию",
-            client_options,
-            key="product_add_customer_filter"
-        )
+        # В режиме создания фильтр по заказчику не нужен.
         clients = get_clients()
         client_map = {f"{row['id']} — {row['name']}": int(row['id']) for _, row in clients.iterrows()} if not clients.empty else {}
         with st.form("create_product_form"):
@@ -2906,24 +2949,54 @@ elif menu == "Склад материалов":
 
 elif menu == "Поставщики":
 
-    st.header(
-        "Поставщики"
+    st.header("Поставщики")
+
+    supplier_sub = st.radio(
+        "Поставщики",
+        [
+            "Перечень поставщиков",
+            "Создать поставщика",
+            "Материалы поставщика",
+            "Коррекция удаление Поставщиков"
+        ],
+        horizontal=True,
+        key="suppliers_navigation"
     )
 
     suppliers = get_suppliers()
 
-    with st.expander(
-        "Создать поставщика",
-        expanded=False
-    ):
+    # --------------------------------------------------------
+    # 1. SUPPLIER LIST
+    # --------------------------------------------------------
+    if supplier_sub == "Перечень поставщиков":
 
-        with st.form(
-            "create_supplier"
-        ):
+        st.subheader("Перечень поставщиков")
 
-            name = st.text_input(
-                "Название"
+        if suppliers.empty:
+            st.info("Поставщиков нет.")
+        else:
+            display_cols = [
+                c for c in [
+                    "id", "name", "type", "contact_person",
+                    "phone", "email", "category", "conditions"
+                ] if c in suppliers.columns
+            ]
+            st.dataframe(
+                suppliers[display_cols],
+                width="stretch",
+                hide_index=True
             )
+
+    # --------------------------------------------------------
+    # 2. CREATE SUPPLIER
+    # --------------------------------------------------------
+    elif supplier_sub == "Создать поставщика":
+
+        st.subheader("Создать поставщика")
+
+        with st.form("create_supplier_new"):
+
+            name = st.text_input("Название")
 
             supplier_type = st.selectbox(
                 "Тип поставщика",
@@ -2934,44 +3007,20 @@ elif menu == "Поставщики":
                 ]
             )
 
-            contact_person = st.text_input(
-                "Контактное лицо"
-            )
+            contact_person = st.text_input("Контактное лицо")
+            phone = st.text_input("Телефон")
+            email = st.text_input("Email")
+            category = st.text_input("Категория")
+            conditions = st.text_area("Условия")
+            contact_info = st.text_area("Контактная информация")
 
-            phone = st.text_input(
-                "Телефон"
-            )
-
-            email = st.text_input(
-                "Email"
-            )
-
-            category = st.text_input(
-                "Категория"
-            )
-
-            conditions = st.text_area(
-                "Условия"
-            )
-
-            contact_info = st.text_area(
-                "Контактная информация"
-            )
-
-            submit = st.form_submit_button(
-                "Создать поставщика"
-            )
+            submit = st.form_submit_button("Создать поставщика")
 
             if submit:
 
                 if not name.strip():
-
-                    st.warning(
-                        "Необходимо указать название."
-                    )
-
+                    st.warning("Необходимо указать название.")
                 else:
-
                     run_query(
                         """
                         INSERT INTO reklet.suppliers
@@ -2985,115 +3034,56 @@ elif menu == "Поставщики":
                             category,
                             conditions
                         )
-
-                        VALUES
-                        (
-                            %s,%s,%s,%s,
-                            %s,%s,%s,%s
-                        )
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
                         """,
                         (
-                            name,
+                            name.strip(),
                             supplier_type,
-                            contact_info,
-                            contact_person,
-                            phone,
-                            email,
-                            category,
-                            conditions
+                            contact_info.strip() or None,
+                            contact_person.strip() or None,
+                            phone.strip() or None,
+                            email.strip() or None,
+                            category.strip() or None,
+                            conditions.strip() or None
                         )
                     )
-
-                    st.success(
-                        "Поставщик создан."
-                    )
-
+                    st.success("Поставщик создан.")
                     st.rerun()
 
+    # --------------------------------------------------------
+    # 3. SUPPLIER MATERIALS
+    # --------------------------------------------------------
+    elif supplier_sub == "Материалы поставщика":
 
-    if not suppliers.empty:
-
-        display = suppliers[
-            [
-                "id",
-                "name",
-                "type",
-                "contact_person",
-                "phone",
-                "email",
-                "category",
-                "conditions"
-            ]
-        ].copy()
-
-        edited = data_editor_ru(
-            display,
-            key="suppliers_editor",
-            width="stretch"
-        )
-
-        if st.button(
-            "Сохранить изменения поставщика"
-        ):
-
-            for _, row in edited.iterrows():
-
-                run_query(
-                    """
-                    UPDATE reklet.suppliers
-
-                    SET
-
-                        name = %s,
-                        type = %s,
-                        contact_person = %s,
-                        phone = %s,
-                        email = %s,
-                        category = %s,
-                        conditions = %s
-
-                    WHERE id = %s
-                    """,
-                    (
-                        row["name"],
-                        row["type"],
-                        row["contact_person"],
-                        row["phone"],
-                        row["email"],
-                        row["category"],
-                        row["conditions"],
-                        safe_int(row["id"])
-                    )
-                )
-
-            st.success(
-                "Сохранено."
-            )
-
-            st.rerun()
-
-
-        st.markdown("---")
         st.subheader("Материалы поставщика")
 
-        if not suppliers.empty:
-            supplier_material_map = {
+        if suppliers.empty:
+            st.info("Сначала создайте поставщика.")
+        else:
+            supplier_map = {
                 f"{row['id']} — {row['name']}": int(row['id'])
                 for _, row in suppliers.iterrows()
             }
+
             selected_supplier_label = st.selectbox(
-                "Поставщик",
-                list(supplier_material_map.keys()),
-                key="supplier_material_supplier"
+                "Отбор по поставщику",
+                list(supplier_map.keys()),
+                key="supplier_material_filter"
             )
-            selected_supplier_id = supplier_material_map[selected_supplier_label]
+            selected_supplier_id = supplier_map[selected_supplier_label]
 
             material_data = run_query(
                 """
-                SELECT ms.id, m.name AS material, ms.purchase_price,
-                       ms.supplier_code, ms.conditions, ms.is_preferred
+                SELECT
+                    ms.id,
+                    m.name AS material,
+                    ms.purchase_price,
+                    ms.supplier_code,
+                    ms.conditions,
+                    ms.is_preferred
                 FROM reklet.material_suppliers ms
-                JOIN reklet.materials m ON m.id = ms.material_id
+                JOIN reklet.materials m
+                    ON m.id = ms.material_id
                 WHERE ms.supplier_id = %s
                 ORDER BY m.name
                 """,
@@ -3102,7 +3092,11 @@ elif menu == "Поставщики":
             )
 
             if not material_data.empty:
-                st.dataframe(material_data, width="stretch", hide_index=True)
+                st.dataframe(
+                    material_data,
+                    width="stretch",
+                    hide_index=True
+                )
             else:
                 st.info("Для этого поставщика материалы пока не привязаны.")
 
@@ -3113,79 +3107,209 @@ elif menu == "Поставщики":
             }
 
             if material_options:
-                with st.form("supplier_material_link_form"):
+                with st.form("supplier_material_link_form_new"):
+
                     selected_material_label = st.selectbox(
-                        "Материал", list(material_options.keys())
+                        "Материал",
+                        list(material_options.keys())
                     )
+
                     purchase_price = st.number_input(
-                        "Закупочная цена", min_value=0.0, value=0.0, format="%.2f"
+                        "Закупочная цена",
+                        min_value=0.0,
+                        value=0.0,
+                        format="%.2f"
                     )
+
                     supplier_code = st.text_input("Код поставщика")
                     material_conditions = st.text_area("Условия")
                     preferred = st.checkbox("Предпочтительный поставщик")
-                    save_link = st.form_submit_button("Добавить / сохранить материал")
+
+                    save_link = st.form_submit_button(
+                        "Добавить материал поставщику"
+                    )
 
                     if save_link:
                         run_query(
                             """
                             INSERT INTO reklet.material_suppliers
-                            (material_id, supplier_id, purchase_price, supplier_code, conditions, is_preferred)
+                            (
+                                material_id,
+                                supplier_id,
+                                purchase_price,
+                                supplier_code,
+                                conditions,
+                                is_preferred
+                            )
                             VALUES (%s,%s,%s,%s,%s,%s)
-                            ON CONFLICT (material_id, supplier_id) DO UPDATE SET
+                            ON CONFLICT (material_id, supplier_id)
+                            DO UPDATE SET
                                 purchase_price = EXCLUDED.purchase_price,
                                 supplier_code = EXCLUDED.supplier_code,
                                 conditions = EXCLUDED.conditions,
                                 is_preferred = EXCLUDED.is_preferred
                             """,
-                            (material_options[selected_material_label], selected_supplier_id,
-                             purchase_price, supplier_code, material_conditions, preferred)
+                            (
+                                material_options[selected_material_label],
+                                selected_supplier_id,
+                                purchase_price,
+                                supplier_code.strip() or None,
+                                material_conditions.strip() or None,
+                                preferred
+                            )
                         )
                         st.success("Материал поставщика сохранён.")
                         st.rerun()
 
-        st.markdown("---")
+    # --------------------------------------------------------
+    # 4. CORRECT / DELETE SUPPLIER
+    # --------------------------------------------------------
+    elif supplier_sub == "Коррекция удаление Поставщиков":
 
-        with st.expander("Удаление", expanded=False):
-            st.warning(
-                "Внимание: удаление поставщика необратимо. "
-                "Если поставщик используется в материалах, удалить его может быть невозможно."
-            )
+        st.subheader("Коррекция удаление Поставщиков")
 
-            delete_map = {
-                f"{row['id']} — {row['name']}": int(row["id"])
+        if suppliers.empty:
+            st.info("Поставщиков нет.")
+        else:
+            supplier_map = {
+                f"{row['id']} — {row['name']}": int(row['id'])
                 for _, row in suppliers.iterrows()
             }
 
-            delete_label = st.selectbox(
+            selected_label = st.selectbox(
                 "Поставщик",
-                list(delete_map.keys()),
-                key="delete_supplier"
+                list(supplier_map.keys()),
+                key="supplier_edit_select"
+            )
+            selected_id = supplier_map[selected_label]
+            row = suppliers[suppliers["id"] == selected_id].iloc[0]
+
+            with st.form("edit_supplier_form"):
+
+                name = st.text_input(
+                    "Название",
+                    value=str(row.get("name") or "")
+                )
+
+                types = [
+                    "material_supplier",
+                    "subcontractor",
+                    "both"
+                ]
+                current_type = str(row.get("type") or "material_supplier")
+                type_index = types.index(current_type) if current_type in types else 0
+
+                supplier_type = st.selectbox(
+                    "Тип поставщика",
+                    types,
+                    index=type_index
+                )
+
+                contact_person = st.text_input(
+                    "Контактное лицо",
+                    value=str(row.get("contact_person") or "")
+                )
+                phone = st.text_input(
+                    "Телефон",
+                    value=str(row.get("phone") or "")
+                )
+                email = st.text_input(
+                    "Email",
+                    value=str(row.get("email") or "")
+                )
+                category = st.text_input(
+                    "Категория",
+                    value=str(row.get("category") or "")
+                )
+                conditions = st.text_area(
+                    "Условия",
+                    value=str(row.get("conditions") or "")
+                )
+                contact_info = st.text_area(
+                    "Контактная информация",
+                    value=str(row.get("contact_info") or "")
+                )
+
+                save = st.form_submit_button("Сохранить изменения")
+
+                if save:
+                    if not name.strip():
+                        st.warning("Название поставщика не может быть пустым.")
+                    else:
+                        run_query(
+                            """
+                            UPDATE reklet.suppliers
+                            SET
+                                name = %s,
+                                type = %s,
+                                contact_info = %s,
+                                contact_person = %s,
+                                phone = %s,
+                                email = %s,
+                                category = %s,
+                                conditions = %s
+                            WHERE id = %s
+                            """,
+                            (
+                                name.strip(),
+                                supplier_type,
+                                contact_info.strip() or None,
+                                contact_person.strip() or None,
+                                phone.strip() or None,
+                                email.strip() or None,
+                                category.strip() or None,
+                                conditions.strip() or None,
+                                selected_id
+                            )
+                        )
+                        st.success("Данные поставщика изменены.")
+                        st.rerun()
+
+            st.markdown("---")
+            st.warning(
+                "Удаление безопасное. Поставщик не будет удалён, если он используется "
+                "в материалах, движениях или других связанных данных."
             )
 
             confirm_supplier = st.checkbox(
-                "Я понимаю, что удаление поставщика необратимо.",
-                key="confirm_delete_supplier"
+                "Я подтверждаю удаление выбранного поставщика.",
+                key="confirm_supplier_delete_new"
             )
 
             if st.button(
                 "Удалить поставщика",
-                key="delete_supplier_button",
+                key="delete_supplier_safe_new",
                 disabled=not confirm_supplier
             ):
                 try:
-                    run_query(
+                    used = run_query(
                         """
-                        DELETE FROM
-                            reklet.suppliers
-                        WHERE id = %s
+                        SELECT
+                            (SELECT COUNT(*) FROM reklet.material_suppliers WHERE supplier_id = %s) AS material_links,
+                            (SELECT COUNT(*) FROM reklet.material_transactions WHERE supplier_id = %s) AS transactions
                         """,
-                        (delete_map[delete_label],)
+                        (selected_id, selected_id),
+                        fetch=True
                     )
-                    st.success("Поставщик удалён.")
-                    st.rerun()
+
+                    material_links = int(used.iloc[0]["material_links"])
+                    transactions = int(used.iloc[0]["transactions"])
+
+                    if material_links > 0 or transactions > 0:
+                        st.error(
+                            "Удаление невозможно: поставщик используется в связанных данных. "
+                            "Сначала удалите/замените эти связи."
+                        )
+                    else:
+                        run_query(
+                            "DELETE FROM reklet.suppliers WHERE id = %s",
+                            (selected_id,)
+                        )
+                        st.success("Поставщик удалён.")
+                        st.rerun()
 
                 except Exception as e:
-                    st.error("Поставщика нельзя удалить.")
+                    st.error("Поставщика нельзя удалить безопасно.")
                     st.code(str(e))
 
 
