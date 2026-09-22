@@ -3621,20 +3621,6 @@ elif menu == "Производство":
         st.markdown("---")
         st.subheader("Движения по производству")
 
-        movement_objects = run_query(
-            """
-            SELECT DISTINCT
-                o.id,
-                o.object_name
-            FROM reklet.finished_goods_transactions fgt
-            JOIN reklet.objects o
-                ON o.id = fgt.object_id
-            WHERE fgt.operation_type = 'ready'
-            ORDER BY o.object_name
-            """,
-            fetch=True
-        )
-
         movement_clients = run_query(
             """
             SELECT DISTINCT
@@ -3663,6 +3649,27 @@ elif menu == "Производство":
                 movement_client_options,
                 key="production_movement_client_filter"
             )
+
+        selected_movement_client_id = None
+        if movement_client_filter != "Все заказчики":
+            selected_movement_client_id = int(movement_client_filter.split(" — ")[0])
+
+        movement_objects_query = """
+            SELECT DISTINCT o.id, o.object_name
+            FROM reklet.finished_goods_transactions fgt
+            JOIN reklet.objects o ON o.id = fgt.object_id
+            WHERE fgt.operation_type = 'ready'
+        """
+        movement_objects_params = []
+        if selected_movement_client_id is not None:
+            movement_objects_query += " AND o.client_id = %s "
+            movement_objects_params.append(selected_movement_client_id)
+        movement_objects_query += " ORDER BY o.object_name"
+        movement_objects = run_query(
+            movement_objects_query,
+            tuple(movement_objects_params),
+            fetch=True
+        )
 
         with col2:
             movement_object_options = ["Все объекты"] + [
@@ -4154,20 +4161,6 @@ elif menu == "Готовая продукция":
         "Движения по складу готовой продукции"
     )
 
-    movement_objects = run_query(
-        """
-        SELECT DISTINCT
-            o.id,
-            o.object_name
-        FROM reklet.finished_goods_transactions fgt
-        LEFT JOIN reklet.objects o
-            ON o.id = fgt.object_id
-        WHERE fgt.operation_type = 'arrive'
-        ORDER BY o.object_name
-        """,
-        fetch=True
-    )
-
     movement_clients = run_query(
         """
         SELECT DISTINCT
@@ -4187,7 +4180,6 @@ elif menu == "Готовая продукция":
     m1, m2 = st.columns(2)
 
     with m1:
-
         movement_client_filter = st.selectbox(
             "Отбор по заказчику",
             ["Все заказчики"]
@@ -4200,8 +4192,28 @@ elif menu == "Готовая продукция":
             key="finished_goods_movement_client_filter"
         )
 
-    with m2:
+    selected_movement_client_id = None
+    if movement_client_filter != "Все заказчики":
+        selected_movement_client_id = int(movement_client_filter.split(" — ")[0])
 
+    movement_objects_query = """
+        SELECT DISTINCT o.id, o.object_name
+        FROM reklet.finished_goods_transactions fgt
+        LEFT JOIN reklet.objects o ON o.id = fgt.object_id
+        WHERE fgt.operation_type = 'arrive'
+    """
+    movement_objects_params = []
+    if selected_movement_client_id is not None:
+        movement_objects_query += " AND o.client_id = %s "
+        movement_objects_params.append(selected_movement_client_id)
+    movement_objects_query += " ORDER BY o.object_name"
+    movement_objects = run_query(
+        movement_objects_query,
+        tuple(movement_objects_params),
+        fetch=True
+    )
+
+    with m2:
         movement_object_filter = st.selectbox(
             "Отбор по объекту",
             ["Все объекты"]
@@ -4241,17 +4253,15 @@ elif menu == "Готовая продукция":
     movement_params = []
 
     if movement_object_filter != "Все объекты":
-
         movement_query += " AND fgt.object_id = %s "
         movement_params.append(
             int(movement_object_filter.split(" — ")[0])
         )
 
-    if movement_object_filter != "Все объекты":
-
+    if movement_client_filter != "Все заказчики":
         movement_query += " AND o.client_id = %s "
         movement_params.append(
-            int(movement_object_filter.split(" — ")[0])
+            int(movement_client_filter.split(" — ")[0])
         )
 
     movement_query += """
@@ -4683,18 +4693,6 @@ elif menu == "Монтаж":
     st.markdown("---")
     st.subheader("Движения по монтажу")
 
-    archive_objects = run_query(
-        """
-        SELECT DISTINCT o.id, o.object_name
-        FROM reklet.object_items oi
-        JOIN reklet.objects o ON o.id = oi.object_id
-        WHERE COALESCE(oi.qty_installed, 0) >= COALESCE(oi.quantity_needed, 0)
-          AND COALESCE(oi.quantity_needed, 0) > 0
-        ORDER BY o.object_name
-        """,
-        fetch=True
-    )
-
     archive_clients = run_query(
         """
         SELECT DISTINCT c.id, c.name
@@ -4717,6 +4715,29 @@ elif menu == "Монтаж":
             ] if not archive_clients.empty else ["Все заказчики"],
             key="installation_archive_client_filter"
         )
+
+    selected_archive_client_id = None
+    if archive_client_filter != "Все заказчики":
+        selected_archive_client_id = int(archive_client_filter.split(" — ")[0])
+
+    archive_objects_query = """
+        SELECT DISTINCT o.id, o.object_name
+        FROM reklet.object_items oi
+        JOIN reklet.objects o ON o.id = oi.object_id
+        WHERE COALESCE(oi.qty_installed, 0) >= COALESCE(oi.quantity_needed, 0)
+          AND COALESCE(oi.quantity_needed, 0) > 0
+    """
+    archive_objects_params = []
+    if selected_archive_client_id is not None:
+        archive_objects_query += " AND o.client_id = %s "
+        archive_objects_params.append(selected_archive_client_id)
+    archive_objects_query += " ORDER BY o.object_name"
+    archive_objects = run_query(
+        archive_objects_query,
+        tuple(archive_objects_params),
+        fetch=True
+    )
+
     with a2:
         archive_object_filter = st.selectbox(
             "Отбор по объекту",
@@ -4744,9 +4765,9 @@ elif menu == "Монтаж":
     if archive_object_filter != "Все объекты":
         archive_query += " AND oi.object_id = %s "
         archive_params.append(int(archive_object_filter.split(" — ")[0]))
-    if archive_object_filter != "Все объекты":
+    if archive_client_filter != "Все заказчики":
         archive_query += " AND o.client_id = %s "
-        archive_params.append(int(archive_object_filter.split(" — ")[0]))
+        archive_params.append(int(archive_client_filter.split(" — ")[0]))
 
     archive_query += " ORDER BY o.object_name, oi.item_name "
 
