@@ -506,6 +506,35 @@ def get_objects():
 
 
 
+def get_active_work_objects():
+    """
+    Объекты, по которым еще не завершены все изделия.
+    Полностью установленные объекты не показываются в рабочих
+    разделах: Производство, Готовая продукция, Транспорт и логистика, Монтаж.
+    """
+    return run_query(
+        """
+        SELECT
+            o.id,
+            o.object_name,
+            o.client_id,
+            c.name AS client_name,
+            o.address
+        FROM reklet.objects o
+        LEFT JOIN reklet.clients c
+            ON c.id = o.client_id
+        WHERE EXISTS (
+            SELECT 1
+            FROM reklet.object_items oi
+            WHERE oi.object_id = o.id
+              AND COALESCE(oi.quantity_needed, 0) > COALESCE(oi.qty_installed, 0)
+        )
+        ORDER BY o.id DESC
+        """,
+        fetch=True
+    )
+
+
 
 def get_materials():
 
@@ -3321,7 +3350,7 @@ elif menu == "Производство":
 
     st.header("Производство")
 
-    objects = get_objects()
+    objects = get_active_work_objects()
 
     if objects.empty:
         st.info("Нет объектов.")
@@ -3706,7 +3735,7 @@ elif menu == "Готовая продукция":
         "Готовая продукция"
     )
 
-    objects = get_objects()
+    objects = get_active_work_objects()
 
     if objects.empty:
 
@@ -4270,7 +4299,7 @@ elif menu == "Транспорт и логистика":
 
     st.header("Транспорт и логистика")
 
-    objects = get_objects()
+    objects = get_active_work_objects()
 
     if objects.empty:
         st.info("Нет объектов.")
@@ -4470,7 +4499,7 @@ elif menu == "Монтаж":
 
     st.header("Монтаж")
 
-    objects = get_objects()
+    objects = get_active_work_objects()
 
     if objects.empty:
         st.info("Нет объектов.")
