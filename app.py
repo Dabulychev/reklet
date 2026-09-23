@@ -105,7 +105,6 @@ def run_query(query, params=None, fetch=False):
             except Exception:
                 pass
 
-            get_connection.clear()
             conn = get_connection()
             cursor = conn.cursor()
 
@@ -166,7 +165,6 @@ def run_transaction(statements):
                 conn.close()
             except Exception:
                 pass
-            get_connection.clear()
             conn = get_connection()
             cursor = conn.cursor()
 
@@ -759,6 +757,48 @@ def get_templates():
     )
 
 
+def ensure_product_category_table():
+    """Create and seed the product category dictionary once per Streamlit session."""
+    if st.session_state.get("_product_categories_ready"):
+        return
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS reklet.product_categories (
+            id serial4 PRIMARY KEY,
+            name text NOT NULL UNIQUE,
+            created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now())
+        )
+        """,
+        """
+        INSERT INTO reklet.product_categories (name)
+        SELECT DISTINCT trim(category)
+        FROM reklet.product_templates
+        WHERE category IS NOT NULL
+          AND trim(category) <> ''
+        ON CONFLICT (name) DO NOTHING
+        """
+    ]
+    try:
+        run_transaction([(statements[0], ()), (statements[1], ())])
+        st.session_state["_product_categories_ready"] = True
+    except Exception:
+        # The app can still work with the legacy text category field.
+        st.session_state["_product_categories_ready"] = False
+        raise
+
+
+def get_product_categories():
+    ensure_product_category_table()
+    return run_query(
+        "SELECT id, name FROM reklet.product_categories ORDER BY name",
+        fetch=True
+    )
+
+
+def get_product_category_names():
+    cats = get_product_categories()
+    return cats["name"].astype(str).tolist() if not cats.empty else []
+
 def get_object_items(object_id):
 
     return run_query(
@@ -1197,234 +1237,288 @@ elif menu == "Объекты":
     # УПРАВЛЕНИЕ ОБЪЕКТАМИ — EXCEL-ПОДОБНОЕ УПРАВЛЕНИЕ ВСЕЙ ЦЕПОЧКОЙ
     # ------------------------------------------------------------
     elif sub == "Управление объектами":
-        clients = get_clients()
         objects = get_objects().sort_values("id", ascending=False).copy()
+        clients = get_clients()
         ensure_stage_movement_tables()
 
-        if clients.empty or objects.empty:
-            st.info("Для управления объектами нужны заказчики и объекты.")
+        if objects.empty:
+            st.info("Объектов нет.")
         else:
-            client_options = [
-                f"{int(r['id'])} — {str(r['name'] or '').strip()}"
-                for _, r in clients.iterrows()
-            ]
-            client_map = {label: int(label.split(" — ")[0]) for label in client_options}
-            selected_client_label = st.selectbox(
-                "Отбор по заказчику", client_options, key="management_client"
+            # В управлении сохраняем оба фильтра: сначала заказчик, затем объект.
+            client_options = ["Все заказчики"] + (
+                clients["name"].fillna("").astype(str).str.strip().loc[lambda x: x != ""].sort_values().unique().tolist()
+                if not clients.empty else []
             )
-            selected_client_id = client_map[selected_client_label]
+            selected_client = st.selectbox(
+                "Заказчик",
+                client_options,
+                key="management_client_filter"
+            )
 
-            client_objects = objects[
-                objects["client_id"].fillna(-1).astype(int).eq(selected_client_id)
-            ].copy()
+            filtered_objects = objects.copy()
+            if selected_client != "Все заказчики":
+                client_ids = clients[
+                    clients["name"].fillna("").astype(str).str.strip().eq(selected_client)
+                ]["id"].tolist()
+                filtered_objects = filtered_objects[
+                    filtered_objects["client_id"].isin(client_ids)
+                ].copy()
 
-            if client_objects.empty:
+            if filtered_objects.empty:
                 st.info("У выбранного заказчика нет объектов.")
             else:
                 object_options = [
                     f"{int(r['id'])} — {str(r['object_name'] or '').strip()}"
-                    for _, r in client_objects.iterrows()
+                    for _, r in filtered_objects.iterrows()
                 ]
                 object_map = {
                     label: int(label.split(" — ")[0]) for label in object_options
                 }
                 selected_object_label = st.selectbox(
-                    "Отбор по объекту", object_options, key="management_object"
+                    "Объект",
+                    object_options,
+                    key="management_object_filter"
                 )
                 object_id = object_map[selected_object_label]
-                object_row = client_objects[client_objects["id"] == object_id].iloc[0]
+                object_row = filtered_objects[filtered_objects["id"] == object_id].iloc[0]
 
                 templates = get_templates()
                 client_name = str(object_row.get("client_name", "") or "").strip()
-                templates = templates[
-                    templates["client_name"].fillna("").astype(str).str.strip().eq(client_name)
-                ].copy()
+                if client_name:
+                    templates = templates[
+                        templates["client_name"].fillna("").astype(str).str.strip().eq(client_name)
+                    ].copy()
+                else:
+                    templates = templates.iloc[0:0].copy()
 
                 current = get_object_items(object_id)
                 current_map = {}
                 if not current.empty:
                     for _, r in current.iterrows():
-                        tid = r.get("product_template_id") if pd.notna(r.get("product_template_id")) else r.get("template_id")
+                        tid = r["product_template_id"] if pd.notna(r["product_template_id"]) else r["template_id"]
                         if pd.notna(tid):
                             current_map[int(tid)] = r
 
-                # Все количественные ячейки являются рабочими ячейками.
-                # Их смысл: текущее количество на соответствующем этапе.
-                # При увеличении любого этапа приложение автоматически проводит
-                # недостающие количества через все предыдущие этапы и пишет историю.
-                stage_columns = [
-                    ("Новые", "qty_new"),
-                    ("Производство", "qty_production"),
-                    ("Готовая продукция", "qty_ready"),
-                    ("Отгружено", "qty_shipped"),
-                    ("Прибыло", "qty_arrived"),
-                    ("Монтаж", "qty_installing"),
-                    ("Смонтировано", "qty_installed"),
-                ]
-                stage_labels = [x[0] for x in stage_columns]
-
                 rows = []
-                for _, t in templates.iterrows():
+                for _, t in templates.sort_values("id").iterrows():
                     tid = int(t["id"])
                     old = current_map.get(tid)
+                    ordered = safe_int(old["quantity_needed"]) if old is not None else 0
+                    qty_new = safe_int(old["qty_new"]) if old is not None else 0
+                    qty_ready = safe_int(old["qty_ready"]) if old is not None else 0
+                    qty_shipped = safe_int(old["qty_shipped"]) if old is not None else 0
+                    qty_arrived = safe_int(old["qty_arrived"]) if old is not None else 0
+                    qty_installing = safe_int(old["qty_installing"]) if old is not None else 0
+                    qty_installed = safe_int(old["qty_installed"]) if old is not None else 0
+
+                    manufactured = max(
+                        ordered - qty_new, 0
+                    )
                     rows.append({
                         "ID": tid,
-                        "Изделие": t["name"],
-                        "Заказано": safe_int(old["quantity_needed"]) if old is not None else 0,
-                        "Новые": safe_int(old["qty_new"]) if old is not None else 0,
-                        "Производство": safe_int(old["qty_production"]) if old is not None else 0,
-                        "Готовая продукция": safe_int(old["qty_ready"]) if old is not None else 0,
-                        "Отгружено": safe_int(old["qty_shipped"]) if old is not None else 0,
-                        "Прибыло": safe_int(old["qty_arrived"]) if old is not None else 0,
-                        "Монтаж": safe_int(old["qty_installing"]) if old is not None else 0,
-                        "Смонтировано": safe_int(old["qty_installed"]) if old is not None else 0,
+                        "Изделие": str(t["name"]),
+                        "1.1 Всего": ordered,
+                        "1.2 Коррекция": 0,
+                        "2.1 Осталось": qty_new,
+                        "2.2 Изготовлено": 0,
+                        "3.1 Ожидается": ordered,
+                        "3.2 Прибыло": qty_ready,
+                        "3.3 Отгружено": 0,
+                        "3.4 Осталось": qty_ready,
+                        "4.1 В пути": qty_shipped,
+                        "4.2 Доставлен": 0,
+                        "5.1 Получено": qty_arrived,
+                        "5.2 Установлено": 0,
+                        "5.4 Всего установлено": qty_installed,
+                        "_manufactured": manufactured,
+                        "_qty_new": qty_new,
+                        "_qty_ready": qty_ready,
+                        "_qty_shipped": qty_shipped,
+                        "_qty_arrived": qty_arrived,
+                        "_qty_installing": qty_installing,
+                        "_qty_installed": qty_installed,
                     })
+
+                st.caption(
+                    "Синие ячейки — системные данные. Зелёные ячейки — действие. "
+                    "После «Выполнить» зелёные ячейки возвращаются к 0."
+                )
 
                 if not rows:
                     st.info("Для этого заказчика ещё не созданы изделия.")
                 else:
                     management_df = pd.DataFrame(rows)
-                    st.caption(
-                        "Можно менять любую количественную ячейку. Например, если в «Смонтировано» поставить 5, "
-                        "система автоматически проведёт эти 5 через объект → производство → готовую продукцию → транспорт → монтаж."
-                    )
+                    editor_df = management_df[
+                        [
+                            "ID", "Изделие",
+                            "1.1 Всего", "1.2 Коррекция",
+                            "2.1 Осталось", "2.2 Изготовлено",
+                            "3.1 Ожидается", "3.2 Прибыло", "3.3 Отгружено", "3.4 Осталось",
+                            "4.1 В пути", "4.2 Доставлен",
+                            "5.1 Получено", "5.2 Установлено", "5.4 Всего установлено"
+                        ]
+                    ].copy()
 
                     with st.form(f"object_management_form_{object_id}", clear_on_submit=False):
                         edited_management = st.data_editor(
-                            management_df,
+                            editor_df,
                             key=f"object_management_editor_{object_id}",
                             width="stretch",
                             hide_index=True,
                             column_config={
-                                "ID": st.column_config.NumberColumn("ID", disabled=True),
-                                "Изделие": st.column_config.TextColumn("Изделие", disabled=True),
-                                "Заказано": st.column_config.NumberColumn("Заказано", min_value=0, step=1, format="%d"),
-                                "Новые": st.column_config.NumberColumn("Новые", min_value=0, step=1, format="%d"),
-                                "Производство": st.column_config.NumberColumn("Производство", min_value=0, step=1, format="%d"),
-                                "Готовая продукция": st.column_config.NumberColumn("Готовая продукция", min_value=0, step=1, format="%d"),
-                                "Отгружено": st.column_config.NumberColumn("Отгружено", min_value=0, step=1, format="%d"),
-                                "Прибыло": st.column_config.NumberColumn("Прибыло", min_value=0, step=1, format="%d"),
-                                "Монтаж": st.column_config.NumberColumn("Монтаж", min_value=0, step=1, format="%d"),
-                                "Смонтировано": st.column_config.NumberColumn("Смонтировано", min_value=0, step=1, format="%d"),
+                                "ID": st.column_config.NumberColumn("№", disabled=True),
+                                "Изделие": st.column_config.TextColumn("Этап / Параметр", disabled=True),
+                                "1.1 Всего": st.column_config.NumberColumn("Всего", disabled=True, format="%d"),
+                                "1.2 Коррекция": st.column_config.NumberColumn("Коррекция", min_value=-100000, step=1, format="%d"),
+                                "2.1 Осталось": st.column_config.NumberColumn("Осталось", disabled=True, format="%d"),
+                                "2.2 Изготовлено": st.column_config.NumberColumn("Изготовлено", min_value=0, step=1, format="%d"),
+                                "3.1 Ожидается": st.column_config.NumberColumn("Ожидается", disabled=True, format="%d"),
+                                "3.2 Прибыло": st.column_config.NumberColumn("Прибыло", disabled=True, format="%d"),
+                                "3.3 Отгружено": st.column_config.NumberColumn("Отгружено", min_value=0, step=1, format="%d"),
+                                "3.4 Осталось": st.column_config.NumberColumn("Осталось", disabled=True, format="%d"),
+                                "4.1 В пути": st.column_config.NumberColumn("В пути", disabled=True, format="%d"),
+                                "4.2 Доставлен": st.column_config.NumberColumn("Доставлен", min_value=0, step=1, format="%d"),
+                                "5.1 Получено": st.column_config.NumberColumn("Получено", disabled=True, format="%d"),
+                                "5.2 Установлено": st.column_config.NumberColumn("Установлено", min_value=0, step=1, format="%d"),
+                                "5.4 Всего установлено": st.column_config.NumberColumn("Всего", disabled=True, format="%d"),
                             },
-                            disabled=["ID", "Изделие"],
+                            disabled=[
+                                "ID", "Изделие",
+                                "1.1 Всего", "2.1 Осталось",
+                                "3.1 Ожидается", "3.2 Прибыло", "3.4 Осталось",
+                                "4.1 В пути", "5.1 Получено", "5.4 Всего установлено"
+                            ],
                         )
-                        management_execute = st.form_submit_button("Выполнить", use_container_width=True)
+                        management_execute = st.form_submit_button(
+                            "Выполнить",
+                            use_container_width=True
+                        )
 
                     if management_execute:
-                        pending = []
                         errors = []
+                        pending = []
 
-                        # Разбираем каждую изменённую строку. В нормальном сценарии
-                        # пользователь меняет одну рабочую ячейку за раз. Если изменено
-                        # несколько этапов одновременно, принимаем их как последовательные
-                        # команды слева направо.
                         for idx, r in edited_management.iterrows():
                             tid = safe_int(r["ID"])
                             name = str(r["Изделие"] or "").strip()
-                            old = current_map.get(tid)
-                            old_state = {
-                                "Заказано": safe_int(old["quantity_needed"]) if old is not None else 0,
-                                "Новые": safe_int(old["qty_new"]) if old is not None else 0,
-                                "Производство": safe_int(old["qty_production"]) if old is not None else 0,
-                                "Готовая продукция": safe_int(old["qty_ready"]) if old is not None else 0,
-                                "Отгружено": safe_int(old["qty_shipped"]) if old is not None else 0,
-                                "Прибыло": safe_int(old["qty_arrived"]) if old is not None else 0,
-                                "Монтаж": safe_int(old["qty_installing"]) if old is not None else 0,
-                                "Смонтировано": safe_int(old["qty_installed"]) if old is not None else 0,
-                            }
-                            requested = {c: safe_int(r[c]) for c in ["Заказано"] + stage_labels}
-                            changed = [c for c in ["Заказано"] + stage_labels if requested[c] != old_state[c]]
-                            if not changed:
-                                continue
+                            base = management_df.iloc[idx]
 
-                            # Один или несколько изменённых этапов превращаем в команды.
-                            # Последовательно применяем изменения к виртуальному состоянию.
+                            old_state = {
+                                "order": safe_int(base["1.1 Всего"]),
+                                "new": safe_int(base["_qty_new"]),
+                                "ready": safe_int(base["_qty_ready"]),
+                                "shipped": safe_int(base["_qty_shipped"]),
+                                "arrived": safe_int(base["_qty_arrived"]),
+                                "installing": safe_int(base["_qty_installing"]),
+                                "installed": safe_int(base["_qty_installed"]),
+                            }
                             state = old_state.copy()
                             commands = []
-                            for col in changed:
-                                target = requested[col]
-                                current_value = state[col]
-                                if target < current_value:
-                                    errors.append(
-                                        f"{name}: нельзя уменьшать «{col}» с {current_value} до {target}. "
-                                        "Движения уже записаны в истории."
-                                    )
-                                    continue
 
-                                delta = target - current_value
-                                if delta == 0:
-                                    continue
+                            correction = safe_int(r["1.2 Коррекция"])
+                            manufactured_action = safe_int(r["2.2 Изготовлено"])
+                            shipped_action = safe_int(r["3.3 Отгружено"])
+                            delivered_action = safe_int(r["4.2 Доставлен"])
+                            installed_action = safe_int(r["5.2 Установлено"])
 
-                                if col == "Заказано":
-                                    # Увеличение заказа создаёт новые единицы на старте.
-                                    state["Заказано"] += delta
-                                    state["Новые"] += delta
-                                    commands.append(("order", delta))
-                                    continue
-
-                                if col == "Новые":
-                                    # «Новые» — это стартовый остаток заказа, а не этап,
-                                    # через который нужно что-либо проводить. Если пользователь
-                                    # поставил здесь 5, создаём/увеличиваем заказ на 5 и оставляем
-                                    # все 5 именно в новых.
-                                    state["Заказано"] += delta
-                                    state["Новые"] += delta
-                                    commands.append(("order", delta))
-                                    continue
-
-                                stage_idx = stage_labels.index(col)
-                                # Для увеличения этапа сначала используем доступные единицы
-                                # на предыдущих этапах, а если их недостаточно — автоматически
-                                # создаём заказ и проводим недостающее количество с нуля.
-                                available_upstream = state["Новые"] + sum(
-                                    state[stage_labels[j]] for j in range(stage_idx)
-                                )
-                                if available_upstream < delta:
-                                    extra = delta - available_upstream
-                                    state["Заказано"] += extra
-                                    state["Новые"] += extra
-                                    commands.append(("order", extra))
-
-                                # Перемещаем delta из ближайших предыдущих этапов.
-                                remaining = delta
-                                for j in range(stage_idx - 1, -1, -1):
-                                    prev_col = stage_labels[j]
-                                    take = min(state[prev_col], remaining)
-                                    if take:
-                                        state[prev_col] -= take
-                                        remaining -= take
-                                        commands.append(("move", j, stage_idx, take))
-                                    if remaining == 0:
-                                        break
-                                if remaining:
-                                    # Остаток берётся из «Новые».
-                                    take = min(state["Новые"], remaining)
-                                    state["Новые"] -= take
-                                    remaining -= take
-                                    if take:
-                                        commands.append(("move", -1, stage_idx, take))
-                                if remaining:
-                                    errors.append(f"{name}: невозможно провести {remaining} шт. до «{col}».")
-                                else:
-                                    state[col] += delta
-
-                            # «Новые» является остатком заказа, поэтому нормализуем его.
-                            occupied = sum(state[c] for c in stage_labels)
-                            if state["Заказано"] < occupied:
-                                state["Заказано"] = occupied
-                            state["Новые"] = state["Заказано"] - sum(state[c] for c in stage_labels[1:])
-                            if state["Новые"] < 0:
-                                errors.append(f"{name}: итоговое состояние превышает заказанное количество.")
+                            if manufactured_action < 0 or shipped_action < 0 or delivered_action < 0 or installed_action < 0:
+                                errors.append(f"{name}: действия на этапах не могут быть отрицательными.")
                                 continue
 
-                            pending.append({
-                                "tid": tid,
-                                "name": name,
-                                "old": old_state,
-                                "new": state,
-                                "commands": commands,
-                            })
+                            # Коррекция заказа.
+                            if correction < 0:
+                                decrease = -correction
+                                if decrease > state["new"]:
+                                    errors.append(
+                                        f"{name}: нельзя уменьшить заказ на {decrease}; "
+                                        f"необработанный остаток заказа только {state['new']}."
+                                    )
+                                    continue
+                                state["order"] -= decrease
+                                state["new"] -= decrease
+                            elif correction > 0:
+                                state["order"] += correction
+                                state["new"] += correction
+
+                            def ensure_stage(target_stage, qty):
+                                """
+                                Ensure qty is available at target stage by automatically
+                                creating/advancing upstream quantities.
+                                Stages: 0=new, 1=ready, 2=shipped, 3=arrived, 4=installed.
+                                """
+                                if qty <= 0:
+                                    return
+
+                                # Build enough quantity through all preceding stages.
+                                for stage in range(1, target_stage + 1):
+                                    available_name = ["new", "ready", "shipped", "arrived"][stage - 1]
+                                    needed = qty - state[available_name]
+                                    if needed <= 0:
+                                        continue
+
+                                    # Ensure previous stage has the needed amount.
+                                    if stage == 1:
+                                        if state["new"] < needed:
+                                            extra = needed - state["new"]
+                                            state["order"] += extra
+                                            state["new"] += extra
+                                            commands.append(("order", extra))
+                                    else:
+                                        ensure_stage(stage - 1, needed)
+
+                                    source_name = ["new", "ready", "shipped", "arrived"][stage - 2] if stage > 1 else "new"
+                                    move = min(needed, state[source_name])
+                                    if move < needed:
+                                        raise ValueError(
+                                            f"Недостаточно количества для перехода на этап {stage}."
+                                        )
+                                    state[source_name] -= move
+                                    state[available_name] += move
+                                    commands.append(("move", stage - 1, stage, move))
+
+                            # 2.2 Изготовлено: доводим нужное количество до готовой продукции.
+                            if manufactured_action:
+                                ensure_stage(1, manufactured_action)
+
+                            # 3.3 Отгружено: при необходимости автоматически изготовить недостающее.
+                            if shipped_action:
+                                ensure_stage(2, shipped_action)
+
+                            # 4.2 Доставлен: автоматически пройти производство + склад + транспорт.
+                            if delivered_action:
+                                ensure_stage(3, delivered_action)
+
+                            # 5.2 Установлено: автоматически пройти всю цепочку до монтажа.
+                            if installed_action:
+                                ensure_stage(4, installed_action)
+
+                            if state["order"] < 0:
+                                errors.append(f"{name}: заказ не может стать отрицательным.")
+                                continue
+
+                            processed = state["ready"] + state["shipped"] + state["arrived"] + state["installing"] + state["installed"]
+                            state["new"] = max(state["order"] - processed, 0)
+
+                            if processed > state["order"]:
+                                errors.append(f"{name}: итоговое количество превышает заказ.")
+                                continue
+
+                            changed = (
+                                state != old_state or
+                                correction != 0 or
+                                manufactured_action != 0 or
+                                shipped_action != 0 or
+                                delivered_action != 0 or
+                                installed_action != 0
+                            )
+                            if changed:
+                                pending.append({
+                                    "tid": tid,
+                                    "name": name,
+                                    "old": old_state,
+                                    "new": state,
+                                    "commands": commands,
+                                })
 
                         if errors:
                             st.error("Операция не подготовлена:\n" + "\n".join(errors))
@@ -1444,9 +1538,16 @@ elif menu == "Объекты":
                             old = change["old"]
                             new = change["new"]
                             st.write(f"**{change['name']}**")
-                            for col in ["Заказано"] + stage_labels:
-                                if old[col] != new[col]:
-                                    st.write(f"• {col}: {old[col]} → {new[col]}")
+                            if old["order"] != new["order"]:
+                                st.write(f"• Заказано: {old['order']} → {new['order']}")
+                            if old["ready"] != new["ready"]:
+                                st.write(f"• На готовой продукции: {old['ready']} → {new['ready']}")
+                            if old["shipped"] != new["shipped"]:
+                                st.write(f"• В пути: {old['shipped']} → {new['shipped']}")
+                            if old["arrived"] != new["arrived"]:
+                                st.write(f"• Получено: {old['arrived']} → {new['arrived']}")
+                            if old["installed"] != new["installed"]:
+                                st.write(f"• Всего установлено: {old['installed']} → {new['installed']}")
 
                         c1, c2 = st.columns(2)
                         with c1:
@@ -1471,11 +1572,10 @@ elif menu == "Объекты":
 
                             for change in pending["changes"]:
                                 tid = change["tid"]
-                                name = change["name"]
                                 old = change["old"]
                                 new = change["new"]
 
-                                # Если изделия на объекте ещё нет, создаём строку.
+                                # Create the object-item row if necessary.
                                 statements.append((
                                     """
                                     INSERT INTO reklet.object_items
@@ -1483,146 +1583,202 @@ elif menu == "Объекты":
                                          quantity_needed, item_name, quantity, qty_new, status)
                                     SELECT %s,%s,%s,%s,%s,%s,%s,'New'
                                     WHERE NOT EXISTS (
-                                        SELECT 1 FROM reklet.object_items
+                                        SELECT 1
+                                        FROM reklet.object_items
                                         WHERE object_id=%s
                                           AND (product_template_id=%s OR template_id=%s)
                                     )
                                     """,
                                     (
                                         object_id, tid, tid,
-                                        new["Заказано"], name, new["Заказано"], new["Новые"],
+                                        new["order"], change["name"], new["order"], new["new"],
                                         object_id, tid, tid
                                     )
                                 ))
 
-                                # Сохраняем итоговое состояние всех ячеек.
+                                # Set the final physical state.
+                                produced_total = (
+                                    new["ready"] + new["shipped"] +
+                                    new["arrived"] + new["installing"] +
+                                    new["installed"]
+                                )
+                                production_status = (
+                                    "completed" if produced_total >= new["order"] and new["order"] > 0
+                                    else "in_progress" if produced_total > 0
+                                    else "not_started"
+                                )
+                                installation_status = (
+                                    "completed" if new["installed"] >= new["order"] and new["order"] > 0
+                                    else "in_progress" if new["installed"] > 0
+                                    else "not_started"
+                                )
+
                                 statements.append((
                                     """
                                     UPDATE reklet.object_items
                                     SET quantity_needed=%s,
                                         quantity=%s,
                                         qty_new=%s,
-                                        qty_production=%s,
+                                        qty_production=0,
                                         qty_ready=%s,
                                         qty_shipped=%s,
                                         qty_arrived=%s,
                                         qty_installing=%s,
                                         qty_installed=%s,
-                                        production_status=CASE
-                                            WHEN %s >= quantity_needed THEN 'completed'
-                                            WHEN %s > 0 THEN 'in_progress'
-                                            ELSE 'not_started'
-                                        END,
-                                        installation_status=CASE
-                                            WHEN %s >= quantity_needed THEN 'completed'
-                                            WHEN %s > 0 THEN 'in_progress'
-                                            ELSE 'not_started'
-                                        END,
+                                        production_status=%s,
                                         production_progress_pct=CASE WHEN %s>0 THEN LEAST(100,ROUND(%s::numeric/%s*100)) ELSE 0 END,
+                                        installation_status=%s,
                                         installation_progress_pct=CASE WHEN %s>0 THEN LEAST(100,ROUND(%s::numeric/%s*100)) ELSE 0 END
                                     WHERE object_id=%s
                                       AND (product_template_id=%s OR template_id=%s)
                                     """,
                                     (
-                                        new["Заказано"], new["Заказано"], new["Новые"],
-                                        new["Производство"], new["Готовая продукция"],
-                                        new["Отгружено"], new["Прибыло"], new["Монтаж"],
-                                        new["Смонтировано"],
-                                        new["Производство"], new["Производство"],
-                                        new["Смонтировано"], new["Монтаж"],
-                                        new["Заказано"], new["Производство"], new["Заказано"],
-                                        new["Заказано"], new["Смонтировано"], new["Заказано"],
+                                        new["order"], new["order"], new["new"],
+                                        new["ready"], new["shipped"], new["arrived"],
+                                        new["installing"], new["installed"],
+                                        production_status,
+                                        new["order"], produced_total, new["order"],
+                                        installation_status,
+                                        new["order"], new["installed"], new["order"],
                                         object_id, tid, tid
                                     )
                                 ))
 
-                                # История каждого перехода. Если пользователь сразу
-                                # ставит количество в конечную ячейку, например
-                                # «Смонтировано = 5», здесь будут записаны ВСЕ переходы:
-                                # производство -> готовая продукция -> транспорт -> объект -> монтаж.
-                                def add_stage_history(from_idx, to_idx, qty):
-                                    for transition in range(from_idx + 1, to_idx + 1):
-                                        if transition == 0:
-                                            # В существующей production_transactions разрешённая история
-                                            # не содержит отдельной операции start. Переход на производство
-                                            # фиксируется операцией completed при выходе в готовую продукцию.
-                                            # Само количество на этапе хранится в object_items.qty_production.
-                                            continue
-                                        elif transition == 1:
-                                            statements.append((
-                                                "INSERT INTO reklet.production_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'completed',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                                (qty, object_id, tid, tid)
-                                            ))
-                                        elif transition == 2:
-                                            statements.append((
-                                                "INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ready',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                                (qty, object_id, tid, tid)
-                                            ))
-                                        elif transition == 3:
-                                            statements.extend([
-                                                (
-                                                    "INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ship',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                                    (qty, object_id, tid, tid)
-                                                ),
-                                                (
-                                                    "INSERT INTO reklet.transport_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ship',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                                    (qty, object_id, tid, tid)
-                                                ),
-                                            ])
-                                        elif transition == 4:
-                                            statements.extend([
-                                                (
-                                                    "INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'arrive',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                                    (qty, object_id, tid, tid)
-                                                ),
-                                                (
-                                                    "INSERT INTO reklet.transport_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'arrive',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                                    (qty, object_id, tid, tid)
-                                                ),
-                                            ])
-                                        elif transition == 5:
-                                            # Отдельная операция start для монтажа не используется в
-                                            # существующей истории; наличие количества в qty_installing
-                                            # фиксируется непосредственно в object_items.
-                                            continue
-                                        elif transition == 6:
-                                            statements.append((
-                                                "INSERT INTO reklet.installation_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'complete',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                                (qty, object_id, tid, tid)
-                                            ))
-
-                                for cmd in change["commands"]:
-                                    if cmd[0] == "order":
-                                        # Отдельная операция 'order' здесь НЕ записывается.
-                                        # В production_transactions у существующей БД operation_type
-                                        # допускает производственные операции ('start'/'completed'),
-                                        # а сам заказ уже отражён в object_items.quantity_needed.
-                                        # Начало производства будет записано add_stage_history()
-                                        # при переходе количества на следующий этап.
+                                # Write every transition generated by the action.
+                                for command in change["commands"]:
+                                    if command[0] == "order":
                                         continue
-                                    else:
-                                        _, from_idx, to_idx, qty = cmd
-                                        if qty > 0:
-                                            add_stage_history(from_idx, to_idx, qty)
 
-                                # finished_goods хранит фактический остаток готовой продукции.
-                                # Приводим его к значению ячейки «Готовая продукция», чтобы
-                                # последующая обычная операция склада продолжила работать.
-                                statements.extend([
-                                    (
-                                        "UPDATE reklet.finished_goods SET quantity=0,status='shipped' WHERE object_item_id=(SELECT id FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s) LIMIT 1) AND status='ready'",
-                                        (object_id, tid, tid)
-                                    ),
-                                    (
-                                        "INSERT INTO reklet.finished_goods (object_item_id,object_id,quantity,status) SELECT id,object_id,%s,'ready' FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s) AND %s>0",
-                                        (new["Готовая продукция"], object_id, tid, tid, new["Готовая продукция"])
-                                    ),
-                                ])
+                                    _, from_stage, to_stage, qty = command
 
-                            run_transaction(statements)
-                            st.session_state.pop("object_management_pending", None)
-                            st.success("Изменения по объекту выполнены. Все необходимые этапы и движения записаны.")
-                            st.rerun()
+                                    if from_stage == 0 and to_stage == 1:
+                                        statements.extend([
+                                            (
+                                                """
+                                                INSERT INTO reklet.production_transactions
+                                                    (object_item_id,object_id,operation_type,quantity)
+                                                SELECT id,object_id,'completed',%s
+                                                FROM reklet.object_items
+                                                WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                LIMIT 1
+                                                """,
+                                                (qty, object_id, tid, tid)
+                                            ),
+                                            (
+                                                """
+                                                INSERT INTO reklet.finished_goods
+                                                    (object_item_id,object_id,quantity,status)
+                                                SELECT id,object_id,%s,'ready'
+                                                FROM reklet.object_items
+                                                WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                LIMIT 1
+                                                """,
+                                                (qty, object_id, tid, tid)
+                                            ),
+                                            (
+                                                """
+                                                INSERT INTO reklet.finished_goods_transactions
+                                                    (object_item_id,object_id,operation_type,quantity)
+                                                SELECT id,object_id,'ready',%s
+                                                FROM reklet.object_items
+                                                WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                LIMIT 1
+                                                """,
+                                                (qty, object_id, tid, tid)
+                                            ),
+                                        ])
+
+                                    elif from_stage == 1 and to_stage == 2:
+                                        statements.extend([
+                                            (
+                                                """
+                                                UPDATE reklet.finished_goods
+                                                SET quantity=GREATEST(quantity-%s,0),
+                                                    status=CASE WHEN quantity-%s<=0 THEN 'shipped' ELSE 'ready' END
+                                                WHERE id=(
+                                                    SELECT id FROM reklet.finished_goods
+                                                    WHERE object_item_id=(
+                                                        SELECT id FROM reklet.object_items
+                                                        WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                        LIMIT 1
+                                                    )
+                                                    AND status='ready' AND quantity>0
+                                                    ORDER BY created_at,id LIMIT 1
+                                                )
+                                                """,
+                                                (qty, qty, object_id, tid, tid)
+                                            ),
+                                            (
+                                                """
+                                                INSERT INTO reklet.finished_goods_transactions
+                                                    (object_item_id,object_id,operation_type,quantity)
+                                                SELECT id,object_id,'ship',%s
+                                                FROM reklet.object_items
+                                                WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                LIMIT 1
+                                                """,
+                                                (qty, object_id, tid, tid)
+                                            ),
+                                            (
+                                                """
+                                                INSERT INTO reklet.transport_transactions
+                                                    (object_item_id,object_id,operation_type,quantity)
+                                                SELECT id,object_id,'ship',%s
+                                                FROM reklet.object_items
+                                                WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                LIMIT 1
+                                                """,
+                                                (qty, object_id, tid, tid)
+                                            ),
+                                        ])
+
+                                    elif from_stage == 2 and to_stage == 3:
+                                        statements.extend([
+                                            (
+                                                """
+                                                INSERT INTO reklet.finished_goods_transactions
+                                                    (object_item_id,object_id,operation_type,quantity)
+                                                SELECT id,object_id,'arrive',%s
+                                                FROM reklet.object_items
+                                                WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                LIMIT 1
+                                                """,
+                                                (qty, object_id, tid, tid)
+                                            ),
+                                            (
+                                                """
+                                                INSERT INTO reklet.transport_transactions
+                                                    (object_item_id,object_id,operation_type,quantity)
+                                                SELECT id,object_id,'arrive',%s
+                                                FROM reklet.object_items
+                                                WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                LIMIT 1
+                                                """,
+                                                (qty, object_id, tid, tid)
+                                            ),
+                                        ])
+
+                                    elif from_stage == 3 and to_stage == 4:
+                                        statements.append((
+                                            """
+                                            INSERT INTO reklet.installation_transactions
+                                                (object_item_id,object_id,operation_type,quantity)
+                                            SELECT id,object_id,'complete',%s
+                                            FROM reklet.object_items
+                                            WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                            LIMIT 1
+                                            """,
+                                            (qty, object_id, tid, tid)
+                                        ))
+
+                            try:
+                                run_transaction(statements)
+                                st.session_state.pop("object_management_pending", None)
+                                st.success("Изменения выполнены. Движения записаны по всем необходимым этапам.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error("Операция не выполнена. Транзакция отменена.")
+                                st.code(str(e))
 
     # ------------------------------------------------------------
     # СОСТАВ ОБЪЕКТА — ТОЛЬКО ПРОСМОТР
@@ -1798,29 +1954,30 @@ elif menu == "Объекты":
 # ============================================================
 # PRODUCT TEMPLATES
 # ============================================================
-
 elif menu == "Изделия":
-
     st.header("Изделия")
-
     product_sub = render_button_nav(
-        ["Перечень изделий", "Добавить изделие", "Спецификация изделия", "Корректировка изделия"],
-        "products_navigation",
-        "products_nav",
-        columns_per_row=4
+        ["Перечень изделий","Добавить изделие","Спецификация изделия",
+         "Корректировка изделия","Категории изделий"],
+        "products_navigation","products_nav",columns_per_row=5
     )
 
     templates_all = get_templates()
     client_options = ["Все заказчики"] + (
-        sorted(templates_all["client_name"].dropna().astype(str).str.strip().loc[lambda x: x != ""].unique().tolist())
+        sorted(templates_all["client_name"].dropna().astype(str).str.strip()
+               .loc[lambda x: x != ""].unique().tolist())
         if not templates_all.empty else []
     )
-
     if product_sub != "Добавить изделие":
-        selected_client = st.selectbox("Отбор по заказчику-изделию", client_options, key=f"product_filter_{product_sub}")
+        selected_client = st.selectbox(
+            "Отбор по заказчику-изделию", client_options,
+            key=f"product_filter_{product_sub}"
+        )
         templates = templates_all.copy()
         if selected_client != "Все заказчики":
-            templates = templates[templates["client_name"].fillna("").astype(str).str.strip().eq(selected_client)].copy()
+            templates = templates[
+                templates["client_name"].fillna("").astype(str).str.strip().eq(selected_client)
+            ].copy()
     else:
         templates = templates_all.copy()
 
@@ -1829,159 +1986,251 @@ elif menu == "Изделия":
         if templates.empty:
             st.info("Изделий нет.")
         else:
-            st.dataframe(templates[["id", "name", "type", "client_name", "category"]], width="stretch", hide_index=True)
+            display = templates[["id","name","type","client_name","category"]].copy()
+            display.columns = ["ID","Изделие","Тип","Заказчик","Категория"]
+            st.dataframe(display,width="stretch",hide_index=True)
 
     elif product_sub == "Добавить изделие":
         st.subheader("Добавить изделие")
-        # В режиме создания фильтр по заказчику не нужен.
         clients = get_clients()
-        client_map = {f"{row['id']} — {row['name']}": int(row['id']) for _, row in clients.iterrows()} if not clients.empty else {}
+        client_map = {f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in clients.iterrows()} if not clients.empty else {}
+        try:
+            categories = get_product_categories()
+        except Exception as e:
+            categories = pd.DataFrame(columns=["id","name"])
+            st.error("Не удалось открыть категории изделий.")
+            st.code(str(e))
+        category_options = categories["name"].astype(str).tolist() if not categories.empty else []
         with st.form("create_product_form"):
             name = st.text_input("Название изделия")
-            type_value = st.selectbox("Тип", ["recurrent", "custom"])
-            customer_label = st.selectbox("Заказчик", list(client_map.keys())) if client_map else None
-            category = st.text_input("Категория")
+            type_value = st.selectbox("Тип",["recurrent","custom"])
+            customer_label = st.selectbox("Заказчик",list(client_map.keys())) if client_map else None
+            category = st.selectbox("Категория",category_options) if category_options else None
             submit = st.form_submit_button("Создать изделие")
             if submit:
                 if not name.strip():
                     st.warning("Необходимо указать название изделия.")
                 elif not client_map:
                     st.warning("Сначала создайте заказчика в разделе «Клиенты».")
+                elif not category:
+                    st.warning("Сначала создайте категорию изделия.")
                 else:
-                    customer_id = client_map[customer_label]
-                    customer_name = clients[clients["id"] == customer_id].iloc[0]["name"]
+                    customer_name = clients[clients["id"]==client_map[customer_label]].iloc[0]["name"]
                     run_query(
-                        """INSERT INTO reklet.product_templates (name,type,client_name,category) VALUES (%s,%s,%s,%s)""",
-                        (name.strip(), type_value, customer_name, category.strip() or None)
+                        """INSERT INTO reklet.product_templates (name,type,client_name,category)
+                           VALUES (%s,%s,%s,%s)""",
+                        (name.strip(),type_value,customer_name,category)
                     )
                     st.success("Изделие создано.")
                     st.rerun()
+
+    elif product_sub == "Категории изделий":
+        st.subheader("Категории изделий")
+        try:
+            categories = get_product_categories()
+        except Exception as e:
+            categories = pd.DataFrame(columns=["id","name"])
+            st.error("Не удалось открыть категории изделий.")
+            st.code(str(e))
+        action = st.radio(
+            "Действие",
+            ["Создать категорию","Корректировать категорию","Удалить категорию"],
+            horizontal=True,key="product_category_action"
+        )
+        if action == "Создать категорию":
+            with st.form("create_product_category"):
+                name = st.text_input("Название категории")
+                if st.form_submit_button("Создать категорию"):
+                    if not name.strip():
+                        st.warning("Название не может быть пустым.")
+                    else:
+                        try:
+                            run_query("INSERT INTO reklet.product_categories (name) VALUES (%s)",(name.strip(),))
+                            st.success("Категория изделия создана.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error("Не удалось создать категорию. Возможно, она уже существует.")
+                            st.code(str(e))
+        elif action == "Корректировать категорию":
+            if categories.empty:
+                st.info("Категорий изделий нет.")
+            else:
+                cmap={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in categories.iterrows()}
+                label=st.selectbox("Категория",list(cmap.keys()),key="edit_product_category")
+                cid=cmap[label]
+                old_name=str(categories[categories["id"]==cid].iloc[0]["name"])
+                with st.form("edit_product_category_form"):
+                    new_name=st.text_input("Новое название",value=old_name)
+                    if st.form_submit_button("Сохранить категорию"):
+                        if not new_name.strip():
+                            st.warning("Название не может быть пустым.")
+                        else:
+                            try:
+                                run_transaction([
+                                    ("UPDATE reklet.product_categories SET name=%s WHERE id=%s",(new_name.strip(),cid)),
+                                    ("UPDATE reklet.product_templates SET category=%s WHERE category=%s",(new_name.strip(),old_name))
+                                ])
+                                st.success("Категория изменена.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error("Не удалось изменить категорию.")
+                                st.code(str(e))
+        else:
+            if categories.empty:
+                st.info("Категорий изделий нет.")
+            else:
+                cmap={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in categories.iterrows()}
+                label=st.selectbox("Категория",list(cmap.keys()),key="delete_product_category")
+                cid=cmap[label]
+                cat_name=str(categories[categories["id"]==cid].iloc[0]["name"])
+                with st.expander("Удаление категории",expanded=False):
+                    st.warning("Категория не будет удалена, если она используется изделиями.")
+                    confirm=st.checkbox("Я подтверждаю удаление категории.",key="confirm_delete_product_category")
+                    if st.button("Удалить категорию",key="delete_product_category",disabled=not confirm):
+                        used=run_query("SELECT COUNT(*) AS cnt FROM reklet.product_templates WHERE category=%s",(cat_name,),fetch=True)
+                        if int(used.iloc[0]["cnt"])>0:
+                            st.error("Удаление невозможно: категория используется изделиями.")
+                        else:
+                            run_query("DELETE FROM reklet.product_categories WHERE id=%s",(cid,))
+                            st.success("Категория удалена.")
+                            st.rerun()
 
     elif product_sub == "Корректировка изделия":
         st.subheader("Корректировка изделия")
         if templates.empty:
             st.info("Нет изделий для корректировки.")
         else:
-            product_map = {f"{row['id']} — {row['name']}": int(row['id']) for _, row in templates.iterrows()}
-            label = st.selectbox("Изделие", list(product_map.keys()), key="edit_product_select")
-            product_id = product_map[label]
-            row = templates[templates["id"] == product_id].iloc[0]
-            clients = get_clients()
-            client_map = {f"{r['id']} — {r['name']}": int(r['id']) for _, r in clients.iterrows()} if not clients.empty else {}
-            current_customer = str(row["client_name"] or "")
-            customer_labels = list(client_map.keys())
-            current_label = next((x for x in customer_labels if x.split(" — ",1)[1] == current_customer), customer_labels[0] if customer_labels else None)
-
+            pmap={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in templates.iterrows()}
+            label=st.selectbox("Изделие",list(pmap.keys()),key="edit_product_select")
+            pid=pmap[label]
+            row=templates[templates["id"]==pid].iloc[0]
+            clients=get_clients()
+            cmap={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in clients.iterrows()} if not clients.empty else {}
+            customer_labels=list(cmap.keys())
+            current_customer=str(row["client_name"] or "")
+            current_label=next((x for x in customer_labels if x.split(" — ",1)[1]==current_customer),customer_labels[0] if customer_labels else None)
+            try:
+                categories=get_product_categories()
+                category_options=categories["name"].astype(str).tolist()
+            except Exception:
+                category_options=[]
+            current_category=str(row["category"] or "")
+            if current_category and current_category not in category_options:
+                category_options=[current_category]+category_options
             with st.form("edit_product_form"):
-                name = st.text_input("Название изделия", value=str(row["name"] or ""))
-                type_value = st.selectbox("Тип", ["recurrent", "custom"], index=0 if row["type"] == "recurrent" else 1)
-                customer_label = st.selectbox("Заказчик", customer_labels, index=customer_labels.index(current_label) if current_label in customer_labels else 0) if customer_labels else None
-                category = st.text_input("Категория", value=str(row["category"] or ""))
-                save = st.form_submit_button("Сохранить изменения")
-                if save:
-                    customer_name = clients[clients["id"] == client_map[customer_label]].iloc[0]["name"] if customer_label else None
+                name=st.text_input("Название изделия",value=str(row["name"] or ""))
+                type_value=st.selectbox("Тип",["recurrent","custom"],index=0 if row["type"]=="recurrent" else 1)
+                customer_label=st.selectbox("Заказчик",customer_labels,index=customer_labels.index(current_label) if current_label in customer_labels else 0) if customer_labels else None
+                category=st.selectbox("Категория",category_options,index=category_options.index(current_category) if current_category in category_options else 0) if category_options else None
+                if st.form_submit_button("Сохранить изменения"):
+                    customer_name=clients[clients["id"]==cmap[customer_label]].iloc[0]["name"] if customer_label else None
                     run_query(
                         """UPDATE reklet.product_templates SET name=%s,type=%s,client_name=%s,category=%s WHERE id=%s""",
-                        (name.strip(), type_value, customer_name, category.strip() or None, product_id)
+                        (name.strip(),type_value,customer_name,category or None,pid)
                     )
                     st.success("Изделие изменено.")
                     st.rerun()
-
-            st.markdown("---")
-            st.warning("Удаление изделия безопасное: изделие, используемое в объекте, удалить нельзя.")
-            confirm = st.checkbox("Я подтверждаю удаление выбранного изделия.", key="confirm_delete_product_new")
-            if st.button("Удалить изделие", key="delete_product_new", disabled=not confirm):
-                used = run_query("SELECT COUNT(*) AS cnt FROM reklet.object_items WHERE product_template_id=%s OR template_id=%s", (product_id, product_id), fetch=True)
-                if int(used.iloc[0]["cnt"]) > 0:
-                    st.error("Удаление невозможно: изделие используется в объекте.")
-                else:
-                    run_query("DELETE FROM reklet.product_template_materials WHERE product_template_id=%s", (product_id,))
-                    run_query("DELETE FROM reklet.product_templates WHERE id=%s", (product_id,))
-                    st.success("Изделие удалено.")
-                    st.rerun()
+            with st.expander("Удаление изделия",expanded=False):
+                st.warning("Безопасное удаление: изделие, используемое в объекте, не будет удалено.")
+                confirm=st.checkbox("Я подтверждаю удаление выбранного изделия.",key="confirm_delete_product")
+                if st.button("Удалить изделие",key="delete_product",disabled=not confirm):
+                    used=run_query(
+                        "SELECT COUNT(*) AS cnt FROM reklet.object_items WHERE product_template_id=%s OR template_id=%s",
+                        (pid,pid),fetch=True
+                    )
+                    if int(used.iloc[0]["cnt"])>0:
+                        st.error("Удаление невозможно: изделие используется в объекте.")
+                    else:
+                        run_transaction([
+                            ("DELETE FROM reklet.product_template_materials WHERE product_template_id=%s",(pid,)),
+                            ("DELETE FROM reklet.product_templates WHERE id=%s",(pid,))
+                        ])
+                        st.success("Изделие удалено.")
+                        st.rerun()
 
     elif product_sub == "Спецификация изделия":
         st.subheader("Спецификация изделия")
         if templates.empty:
             st.info("Нет изделий.")
         else:
-            product_map = {f"{row['id']} — {row['name']} — {row['client_name'] or 'Без заказчика'}": int(row['id']) for _, row in templates.iterrows()}
-            selected = st.selectbox("Изделие", list(product_map.keys()), key="product_spec_select")
-            product_id = product_map[selected]
-            specification = run_query(
-                """SELECT ptm.id, ptm.material_id, m.name AS material_name, u.name AS unit_name, ptm.quantity_per_unit, ptm.waste_coefficient
+            pmap={f"{int(r['id'])} — {r['name']} — {r['client_name'] or 'Без заказчика'}":int(r['id']) for _,r in templates.iterrows()}
+            selected=st.selectbox("Изделие",list(pmap.keys()),key="product_spec_select")
+            pid=pmap[selected]
+            specification=run_query(
+                """SELECT ptm.id,ptm.material_id,m.name AS material_name,u.name AS unit_name,
+                          mc.name AS category_name,ptm.quantity_per_unit,ptm.waste_coefficient
                    FROM reklet.product_template_materials ptm
                    JOIN reklet.materials m ON m.id=ptm.material_id
+                   LEFT JOIN reklet.material_categories mc ON mc.id=m.category_id
                    LEFT JOIN reklet.units u ON u.id=m.unit_id
                    WHERE ptm.product_template_id=%s ORDER BY m.name""",
-                (product_id,), fetch=True
+                (pid,),fetch=True
             )
             if specification.empty:
                 st.info("В спецификации этого изделия нет материалов.")
             else:
-                st.dataframe(specification[["id","material_name","unit_name","quantity_per_unit","waste_coefficient"]], width="stretch", hide_index=True)
+                view=specification[["id","material_name","category_name","unit_name","quantity_per_unit","waste_coefficient"]].copy()
+                view.columns=["ID","Материал","Категория","Единица","Количество на изделие","Коэффициент отходов"]
+                st.dataframe(view,width="stretch",hide_index=True)
 
             st.markdown("---")
-            st.subheader("Добавить материалы в изделие")
-            materials = get_materials()
-            if materials.empty:
-                st.warning("Сначала создайте материалы на складе материалов.")
+            st.subheader("Добавить материал в изделие")
+            materials=get_materials_with_categories()
+            material_categories=get_material_categories()
+            category_options=["Все категории","Без категории"] + (
+                material_categories["name"].astype(str).tolist() if not material_categories.empty else []
+            )
+            selected_category=st.selectbox("Отбор по категории материала",category_options,key=f"spec_material_category_{pid}")
+            filtered=materials.copy()
+            if selected_category=="Без категории":
+                filtered=filtered[filtered["category_id"].isna()].copy()
+            elif selected_category!="Все категории":
+                filtered=filtered[filtered["category_name"].fillna("").astype(str).eq(selected_category)].copy()
+            if filtered.empty:
+                st.info("Материалов по выбранной категории нет.")
             else:
-                spec_add = materials[["id", "name", "unit_name"]].copy()
-                spec_add.insert(0, "Выбрать", False)
-                spec_add["Количество на изделие"] = 0.0
-                spec_add["Коэффициент отходов"] = 1.20
-                spec_add.columns = ["Выбрать", "ID", "Материал", "Единица", "Количество на изделие", "Коэффициент отходов"]
-
-                edited_spec = st.data_editor(
-                    spec_add,
-                    key=f"product_spec_add_editor_{product_id}",
-                    width="stretch",
-                    hide_index=True,
-                    column_config={
-                        "Выбрать": st.column_config.CheckboxColumn("Выбрать"),
-                        "ID": st.column_config.NumberColumn("ID", disabled=True),
-                        "Материал": st.column_config.TextColumn("Материал", disabled=True),
-                        "Единица": st.column_config.TextColumn("Единица", disabled=True),
-                        "Количество на изделие": st.column_config.NumberColumn("Количество на изделие", min_value=0.0, step=0.001, format="%.4f"),
-                        "Коэффициент отходов": st.column_config.NumberColumn("Коэффициент отходов", min_value=0.0, step=0.01, format="%.2f"),
-                    },
-                    disabled=["ID", "Материал", "Единица"],
-                )
-
-                if st.button("Добавить выбранные материалы", key=f"execute_spec_materials_{product_id}", use_container_width=True):
-                    selected_rows = edited_spec[
-                        edited_spec["Выбрать"].fillna(False) &
-                        (edited_spec["Количество на изделие"].fillna(0).astype(float) > 0)
+                spec_add=filtered[["id","name","category_name","unit_name"]].copy()
+                spec_add.insert(0,"Выбрать",False)
+                spec_add["Количество на изделие"]=0.0
+                spec_add["Коэффициент отходов"]=1.20
+                spec_add.columns=["Выбрать","ID","Материал","Категория","Единица","Количество на изделие","Коэффициент отходов"]
+                with st.form(f"product_spec_material_form_{pid}",clear_on_submit=False):
+                    edited=st.data_editor(
+                        spec_add,key=f"product_spec_add_editor_{pid}_{selected_category}",
+                        width="stretch",hide_index=True,
+                        column_config={
+                            "Выбрать":st.column_config.CheckboxColumn("Выбрать"),
+                            "ID":st.column_config.NumberColumn("ID",disabled=True),
+                            "Материал":st.column_config.TextColumn("Материал",disabled=True),
+                            "Категория":st.column_config.TextColumn("Категория",disabled=True),
+                            "Единица":st.column_config.TextColumn("Единица",disabled=True),
+                            "Количество на изделие":st.column_config.NumberColumn("Количество на изделие",min_value=0.0,step=0.001,format="%.4f"),
+                            "Коэффициент отходов":st.column_config.NumberColumn("Коэффициент отходов",min_value=0.0,step=0.01,format="%.2f")
+                        },
+                        disabled=["ID","Материал","Категория","Единица"]
+                    )
+                    execute=st.form_submit_button("Добавить выбранные материалы",use_container_width=True)
+                if execute:
+                    selected_rows=edited[
+                        edited["Выбрать"].fillna(False) &
+                        (edited["Количество на изделие"].fillna(0).astype(float)>0)
                     ]
                     if selected_rows.empty:
                         st.warning("Выберите материалы и укажите количество.")
                     else:
                         statements=[]
-                        for _, row in selected_rows.iterrows():
-                            material_id=safe_int(row["ID"])
-                            qty=safe_float(row["Количество на изделие"])
-                            waste=safe_float(row["Коэффициент отходов"],1.20)
-                            statements.append((
-                                """UPDATE reklet.product_template_materials
-                                   SET quantity_per_unit=%s, waste_coefficient=%s
-                                 WHERE product_template_id=%s AND material_id=%s""",
-                                (qty,waste,product_id,material_id)
-                            ))
-                            statements.append((
-                                """INSERT INTO reklet.product_template_materials
-                                   (product_template_id,material_id,quantity_per_unit,waste_coefficient)
-                                 SELECT %s,%s,%s,%s
-                                  WHERE NOT EXISTS (
-                                      SELECT 1 FROM reklet.product_template_materials
-                                       WHERE product_template_id=%s AND material_id=%s
-                                  )""",
-                                (product_id,material_id,qty,waste,product_id,material_id)
-                            ))
+                        for _,r in selected_rows.iterrows():
+                            mid=safe_int(r["ID"]); qty=safe_float(r["Количество на изделие"]); waste=safe_float(r["Коэффициент отходов"],1.20)
+                            statements.extend([
+                                ("UPDATE reklet.product_template_materials SET quantity_per_unit=%s,waste_coefficient=%s WHERE product_template_id=%s AND material_id=%s",(qty,waste,pid,mid)),
+                                ("""INSERT INTO reklet.product_template_materials(product_template_id,material_id,quantity_per_unit,waste_coefficient)
+                                   SELECT %s,%s,%s,%s WHERE NOT EXISTS
+                                   (SELECT 1 FROM reklet.product_template_materials WHERE product_template_id=%s AND material_id=%s)""",
+                                 (pid,mid,qty,waste,pid,mid))
+                            ])
                         run_transaction(statements)
                         st.success(f"Сохранено материалов: {len(selected_rows)}.")
                         st.rerun()
-
 
 # MATERIALS WAREHOUSE
 # ============================================================
@@ -2004,13 +2253,14 @@ elif menu == "Склад материалов":
         ("Категории материалов", "categories"),
         ("Приход материалов", "receipt"),
         ("Выдача материалов", "issue"),
+        ("Поставщики материала", "supplier_search"),
         ("Движение материалов", "movement"),
     ]
 
     if "material_section" not in st.session_state:
         st.session_state.material_section = "list"
 
-    nav_cols = st.columns(6)
+    nav_cols = st.columns(7)
     for col, (label, value) in zip(nav_cols, material_sections):
         if col.button(label, key=f"material_nav_{value}", use_container_width=True):
             st.session_state.material_section = value
@@ -2365,50 +2615,146 @@ elif menu == "Склад материалов":
                 st.rerun()
 
     elif active_material_section == "issue":
-
         st.subheader("Выдача материалов в производство")
         objects = get_objects()
         if materials.empty or objects.empty:
             st.info("Нужны материалы и объекты.")
         else:
-            object_options={f"{int(r['id'])} — {r['object_name']}":int(r['id']) for _,r in objects.iterrows()}
-            object_label=st.selectbox("Объект", list(object_options.keys()), key="issue_object_batch")
-            object_id=object_options[object_label]
-
-            issue_df=materials[["id","name","unit_name","stock_quantity"]].copy()
-            issue_df.insert(0,"Выбрать",False)
-            issue_df["Выдать"] = 0.0
-            issue_df.columns=["Выбрать","ID","Материал","Единица","На складе","Выдать"]
-            edited_issue=st.data_editor(
-                issue_df,key=f"issue_materials_editor_{object_id}",width="stretch",hide_index=True,
-                column_config={
-                    "Выбрать":st.column_config.CheckboxColumn("Выбрать"),
-                    "ID":st.column_config.NumberColumn("ID",disabled=True),
-                    "Материал":st.column_config.TextColumn("Материал",disabled=True),
-                    "Единица":st.column_config.TextColumn("Единица",disabled=True),
-                    "На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.4f"),
-                    "Выдать":st.column_config.NumberColumn("Выдать",min_value=0.0,step=0.001,format="%.4f"),
-                },disabled=["ID","Материал","Единица","На складе"]
+            object_options = {
+                f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}": int(r['id'])
+                for _,r in objects.sort_values("id",ascending=False).iterrows()
+            }
+            object_label = st.selectbox(
+                "Объект",
+                list(object_options.keys()),
+                key="issue_object_batch"
             )
-            if st.button("Выполнить выдачу в производство",key=f"execute_issue_batch_{object_id}",use_container_width=True):
-                selected=edited_issue[edited_issue["Выбрать"].fillna(False) & (edited_issue["Выдать"].fillna(0).astype(float)>0)]
-                if selected.empty:
-                    st.warning("Выберите материалы и укажите количество.")
-                elif any(safe_float(r["Выдать"]) > safe_float(r["На складе"]) for _,r in selected.iterrows()):
-                    st.error("Нельзя выдать больше, чем есть на складе.")
-                else:
-                    statements=[]
-                    for _,r in selected.iterrows():
-                        material_id=safe_int(r["ID"]); qty=safe_float(r["Выдать"])
-                        statements.append((
-                            """INSERT INTO reklet.material_transactions (material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')""",
-                            (material_id,object_id,qty)
-                        ))
-                        statements.append(("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",(qty,material_id)))
-                    run_transaction(statements)
-                    st.success(f"Выдача выполнена: {len(selected)} поз.")
-                    st.rerun()
+            object_id = object_options[object_label]
 
+            required_ids = set()
+            required = run_query(
+                """
+                SELECT DISTINCT ptm.material_id
+                FROM reklet.object_items oi
+                JOIN reklet.product_template_materials ptm
+                  ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
+                WHERE oi.object_id=%s
+                """,
+                (object_id,),fetch=True
+            )
+            if not required.empty:
+                required_ids = {safe_int(x) for x in required["material_id"].tolist()}
+
+            material_scope = st.selectbox(
+                "Материалы для выбранного объекта",
+                ["Все материалы","Только необходимые для объекта"],
+                key="issue_material_scope"
+            )
+
+            issue_materials = materials.copy()
+            if material_scope == "Только необходимые для объекта":
+                issue_materials = issue_materials[issue_materials["id"].isin(required_ids)].copy()
+                if issue_materials.empty:
+                    st.info("Для выбранного объекта по спецификациям материалов потребности нет.")
+            if not issue_materials.empty:
+                issue_df=issue_materials[["id","name","unit_name","stock_quantity"]].copy()
+                issue_df.insert(0,"Выбрать",False)
+                issue_df["Выдать"]=0.0
+                issue_df.columns=["Выбрать","ID","Материал","Единица","На складе","Выдать"]
+                with st.form(f"issue_materials_form_{object_id}",clear_on_submit=False):
+                    edited_issue=st.data_editor(
+                        issue_df,key=f"issue_materials_editor_{object_id}_{material_scope}",
+                        width="stretch",hide_index=True,
+                        column_config={
+                            "Выбрать":st.column_config.CheckboxColumn("Выбрать"),
+                            "ID":st.column_config.NumberColumn("ID",disabled=True),
+                            "Материал":st.column_config.TextColumn("Материал",disabled=True),
+                            "Единица":st.column_config.TextColumn("Единица",disabled=True),
+                            "На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.4f"),
+                            "Выдать":st.column_config.NumberColumn("Выдать",min_value=0.0,step=0.001,format="%.4f")
+                        },
+                        disabled=["ID","Материал","Единица","На складе"]
+                    )
+                    execute_issue=st.form_submit_button("Выполнить выдачу в производство",use_container_width=True)
+                if execute_issue:
+                    selected=edited_issue[
+                        edited_issue["Выбрать"].fillna(False) &
+                        (edited_issue["Выдать"].fillna(0).astype(float)>0)
+                    ]
+                    if selected.empty:
+                        st.warning("Выберите материалы и укажите количество.")
+                    elif any(safe_float(r["Выдать"])>safe_float(r["На складе"]) for _,r in selected.iterrows()):
+                        st.error("Нельзя выдать больше, чем есть на складе.")
+                    else:
+                        statements=[]
+                        for _,r in selected.iterrows():
+                            mid=safe_int(r["ID"]); qty=safe_float(r["Выдать"])
+                            statements.extend([
+                                ("INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')",(mid,object_id,qty)),
+                                ("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",(qty,mid))
+                            ])
+                        run_transaction(statements)
+                        st.success(f"Выдача выполнена: {len(selected)} поз.")
+                        st.rerun()
+
+    elif active_material_section == "supplier_search":
+        st.subheader("Поставщики материала")
+        all_materials = get_materials_with_categories()
+        if all_materials.empty:
+            st.info("Материалов нет.")
+        else:
+            categories = get_material_categories()
+            category_options = ["Все категории","Без категории"] + (
+                categories["name"].astype(str).tolist() if not categories.empty else []
+            )
+            category = st.selectbox(
+                "Категория материала",
+                category_options,
+                key="supplier_search_material_category"
+            )
+            filtered = all_materials.copy()
+            if category == "Без категории":
+                filtered = filtered[filtered["category_id"].isna()].copy()
+            elif category != "Все категории":
+                filtered = filtered[
+                    filtered["category_name"].fillna("").astype(str).eq(category)
+                ].copy()
+
+            if filtered.empty:
+                st.info("В выбранной категории материалов нет.")
+            else:
+                material_map = {
+                    f"{int(r['id'])} — {r['name']}": int(r['id'])
+                    for _,r in filtered.sort_values("name").iterrows()
+                }
+                selected_material = st.selectbox(
+                    "Материал",
+                    list(material_map.keys()),
+                    key="supplier_search_material"
+                )
+                material_id = material_map[selected_material]
+                suppliers_for_material = run_query(
+                    """
+                    SELECT
+                        s.id,
+                        s.name AS supplier,
+                        ms.purchase_price,
+                        ms.supplier_code,
+                        ms.conditions,
+                        ms.is_preferred
+                    FROM reklet.material_suppliers ms
+                    JOIN reklet.suppliers s ON s.id=ms.supplier_id
+                    WHERE ms.material_id=%s
+                    ORDER BY s.name
+                    """,
+                    (material_id,),fetch=True
+                )
+                if suppliers_for_material.empty:
+                    st.info("Для этого материала поставщики не назначены.")
+                else:
+                    view=suppliers_for_material.copy()
+                    view.columns=["ID","Поставщик","Цена","Код поставщика","Условия","Предпочтительный"]
+                    st.dataframe(view,width="stretch",hide_index=True)
 
     elif active_material_section == "movement":
 
@@ -2478,372 +2824,177 @@ elif menu == "Склад материалов":
 # ============================================================
 # SUPPLIERS
 # ============================================================
-
 elif menu == "Поставщики":
-
     st.header("Поставщики")
 
     supplier_sub = render_button_nav(
-        [
-            "Перечень поставщиков",
-            "Создать поставщика",
-            "Материалы поставщика",
-            "Коррекция удаление Поставщиков"
-        ],
-        "suppliers_navigation",
-        "suppliers_nav",
-        columns_per_row=4
+        ["Перечень поставщиков","Создать поставщика","Материалы поставщика","Коррекция удаление Поставщиков"],
+        "suppliers_navigation","suppliers_nav",columns_per_row=4
     )
+    suppliers=get_suppliers()
 
-    suppliers = get_suppliers()
-
-    # --------------------------------------------------------
-    # 1. SUPPLIER LIST
-    # --------------------------------------------------------
-    if supplier_sub == "Перечень поставщиков":
-
+    if supplier_sub=="Перечень поставщиков":
         st.subheader("Перечень поставщиков")
-
         if suppliers.empty:
             st.info("Поставщиков нет.")
         else:
-            display_cols = [
-                c for c in [
-                    "id", "name", "type", "contact_person",
-                    "phone", "email", "category", "conditions"
-                ] if c in suppliers.columns
-            ]
-            st.dataframe(
-                suppliers[display_cols],
-                width="stretch",
-                hide_index=True
-            )
+            display_cols=[c for c in ["id","name","type","contact_person","phone","email","category","conditions"] if c in suppliers.columns]
+            st.dataframe(suppliers[display_cols],width="stretch",hide_index=True)
 
-    # --------------------------------------------------------
-    # 2. CREATE SUPPLIER
-    # --------------------------------------------------------
-    elif supplier_sub == "Создать поставщика":
-
+    elif supplier_sub=="Создать поставщика":
         st.subheader("Создать поставщика")
-
         with st.form("create_supplier_new"):
-
-            name = st.text_input("Название")
-
-            supplier_type = st.selectbox(
-                "Тип поставщика",
-                [
-                    "material_supplier",
-                    "subcontractor",
-                    "both"
-                ]
-            )
-
-            contact_person = st.text_input("Контактное лицо")
-            phone = st.text_input("Телефон")
-            email = st.text_input("Email")
-            category = st.text_input("Категория")
-            conditions = st.text_area("Условия")
-            contact_info = st.text_area("Контактная информация")
-
-            submit = st.form_submit_button("Создать поставщика")
-
+            name=st.text_input("Название")
+            supplier_type=st.selectbox("Тип поставщика",["material_supplier","subcontractor","both"])
+            contact_person=st.text_input("Контактное лицо")
+            phone=st.text_input("Телефон")
+            email=st.text_input("Email")
+            category=st.text_input("Категория")
+            conditions=st.text_area("Условия")
+            contact_info=st.text_area("Контактная информация")
+            submit=st.form_submit_button("Создать поставщика")
             if submit:
-
                 if not name.strip():
                     st.warning("Необходимо указать название.")
                 else:
                     run_query(
-                        """
-                        INSERT INTO reklet.suppliers
-                        (
-                            name,
-                            type,
-                            contact_info,
-                            contact_person,
-                            phone,
-                            email,
-                            category,
-                            conditions
-                        )
-                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-                        """,
-                        (
-                            name.strip(),
-                            supplier_type,
-                            contact_info.strip() or None,
-                            contact_person.strip() or None,
-                            phone.strip() or None,
-                            email.strip() or None,
-                            category.strip() or None,
-                            conditions.strip() or None
-                        )
+                        """INSERT INTO reklet.suppliers
+                           (name,type,contact_info,contact_person,phone,email,category,conditions)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (name.strip(),supplier_type,contact_info.strip() or None,
+                         contact_person.strip() or None,phone.strip() or None,
+                         email.strip() or None,category.strip() or None,conditions.strip() or None)
                     )
                     st.success("Поставщик создан.")
                     st.rerun()
 
-    # --------------------------------------------------------
-    # 3. SUPPLIER MATERIALS
-    # --------------------------------------------------------
-    elif supplier_sub == "Материалы поставщика":
-
+    elif supplier_sub=="Материалы поставщика":
         st.subheader("Материалы поставщика")
-
         if suppliers.empty:
             st.info("Сначала создайте поставщика.")
         else:
-            supplier_map = {
-                f"{row['id']} — {row['name']}": int(row['id'])
-                for _, row in suppliers.iterrows()
-            }
+            supplier_map={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in suppliers.iterrows()}
+            selected_supplier_label=st.selectbox("Отбор по поставщику",list(supplier_map.keys()),key="supplier_material_filter")
+            supplier_id=supplier_map[selected_supplier_label]
 
-            selected_supplier_label = st.selectbox(
-                "Отбор по поставщику",
-                list(supplier_map.keys()),
-                key="supplier_material_filter"
+            linked=run_query(
+                """SELECT ms.id,m.id AS material_id,m.name AS material,
+                          mc.name AS category,ms.purchase_price,ms.supplier_code,
+                          ms.conditions,ms.is_preferred
+                   FROM reklet.material_suppliers ms
+                   JOIN reklet.materials m ON m.id=ms.material_id
+                   LEFT JOIN reklet.material_categories mc ON mc.id=m.category_id
+                   WHERE ms.supplier_id=%s ORDER BY m.name""",
+                (supplier_id,),fetch=True
             )
-            selected_supplier_id = supplier_map[selected_supplier_label]
-
-            material_data = run_query(
-                """
-                SELECT
-                    ms.id,
-                    m.name AS material,
-                    ms.purchase_price,
-                    ms.supplier_code,
-                    ms.conditions,
-                    ms.is_preferred
-                FROM reklet.material_suppliers ms
-                JOIN reklet.materials m
-                    ON m.id = ms.material_id
-                WHERE ms.supplier_id = %s
-                ORDER BY m.name
-                """,
-                (selected_supplier_id,),
-                fetch=True
-            )
-
-            if not material_data.empty:
-                st.dataframe(
-                    material_data,
-                    width="stretch",
-                    hide_index=True
-                )
-            else:
+            if linked.empty:
                 st.info("Для этого поставщика материалы пока не привязаны.")
+            else:
+                view=linked.copy()
+                view.columns=["ID связи","ID материала","Материал","Категория","Цена","Код поставщика","Условия","Предпочтительный"]
+                st.dataframe(view,width="stretch",hide_index=True)
 
-            all_materials = get_materials_with_categories()
-            material_options = {
-                f"{row['name']} — {row['category_name'] or 'Без категории'}": int(row['id'])
-                for _, row in all_materials.iterrows()
+            all_materials=get_materials_with_categories()
+            material_options={
+                f"{r['name']} — {r['category_name'] or 'Без категории'}":int(r['id'])
+                for _,r in all_materials.iterrows()
             }
-
             if material_options:
                 with st.form("supplier_material_link_form_new"):
-
-                    selected_material_label = st.selectbox(
-                        "Материал",
-                        list(material_options.keys())
-                    )
-
-                    purchase_price = st.number_input(
-                        "Закупочная цена",
-                        min_value=0.0,
-                        value=0.0,
-                        format="%.2f"
-                    )
-
-                    supplier_code = st.text_input("Код поставщика")
-                    material_conditions = st.text_area("Условия")
-                    preferred = st.checkbox("Предпочтительный поставщик")
-
-                    save_link = st.form_submit_button(
-                        "Добавить материал поставщику"
-                    )
-
-                    if save_link:
+                    material_label=st.selectbox("Материал для добавления",list(material_options.keys()))
+                    price=st.number_input("Закупочная цена",min_value=0.0,value=0.0,format="%.2f")
+                    code=st.text_input("Код поставщика")
+                    conditions=st.text_area("Условия")
+                    preferred=st.checkbox("Предпочтительный поставщик")
+                    if st.form_submit_button("Добавить материал поставщику"):
                         run_query(
-                            """
-                            INSERT INTO reklet.material_suppliers
-                            (
-                                material_id,
-                                supplier_id,
-                                purchase_price,
-                                supplier_code,
-                                conditions,
-                                is_preferred
-                            )
-                            VALUES (%s,%s,%s,%s,%s,%s)
-                            ON CONFLICT (material_id, supplier_id)
-                            DO UPDATE SET
-                                purchase_price = EXCLUDED.purchase_price,
-                                supplier_code = EXCLUDED.supplier_code,
-                                conditions = EXCLUDED.conditions,
-                                is_preferred = EXCLUDED.is_preferred
-                            """,
-                            (
-                                material_options[selected_material_label],
-                                selected_supplier_id,
-                                purchase_price,
-                                supplier_code.strip() or None,
-                                material_conditions.strip() or None,
-                                preferred
-                            )
+                            """INSERT INTO reklet.material_suppliers
+                               (material_id,supplier_id,purchase_price,supplier_code,conditions,is_preferred)
+                               VALUES (%s,%s,%s,%s,%s,%s)
+                               ON CONFLICT(material_id,supplier_id)
+                               DO UPDATE SET purchase_price=EXCLUDED.purchase_price,
+                                             supplier_code=EXCLUDED.supplier_code,
+                                             conditions=EXCLUDED.conditions,
+                                             is_preferred=EXCLUDED.is_preferred""",
+                            (material_options[material_label],supplier_id,price,code.strip() or None,
+                             conditions.strip() or None,preferred)
                         )
-                        st.success("Материал поставщика сохранён.")
+                        st.success("Материал поставщику добавлен.")
                         st.rerun()
 
-    # --------------------------------------------------------
-    # 4. CORRECT / DELETE SUPPLIER
-    # --------------------------------------------------------
-    elif supplier_sub == "Коррекция удаление Поставщиков":
+            if not linked.empty:
+                with st.expander("Убрать материал у поставщика",expanded=False):
+                    link_map={
+                        f"{int(r['material_id'])} — {r['material']}":int(r['material_id'])
+                        for _,r in linked.iterrows()
+                    }
+                    unlink_label=st.selectbox("Материал",list(link_map.keys()),key="unlink_supplier_material")
+                    unlink_confirm=st.checkbox(
+                        "Я подтверждаю удаление связи поставщик → материал.",
+                        key="confirm_unlink_supplier_material"
+                    )
+                    if st.button("Убрать материал у поставщика",key="unlink_supplier_material_button",disabled=not unlink_confirm):
+                        run_query(
+                            "DELETE FROM reklet.material_suppliers WHERE supplier_id=%s AND material_id=%s",
+                            (supplier_id,link_map[unlink_label])
+                        )
+                        st.success("Материал убран из списка поставщика.")
+                        st.rerun()
 
-        st.subheader("Коррекция удаление Поставщиков")
-
+    elif supplier_sub=="Коррекция удаление Поставщиков":
+        st.subheader("Коррекция поставщиков")
         if suppliers.empty:
             st.info("Поставщиков нет.")
         else:
-            supplier_map = {
-                f"{row['id']} — {row['name']}": int(row['id'])
-                for _, row in suppliers.iterrows()
-            }
-
-            selected_label = st.selectbox(
-                "Поставщик",
-                list(supplier_map.keys()),
-                key="supplier_edit_select"
-            )
-            selected_id = supplier_map[selected_label]
-            row = suppliers[suppliers["id"] == selected_id].iloc[0]
-
+            supplier_map={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in suppliers.iterrows()}
+            selected_label=st.selectbox("Поставщик",list(supplier_map.keys()),key="supplier_edit_select")
+            selected_id=supplier_map[selected_label]
+            row=suppliers[suppliers["id"]==selected_id].iloc[0]
             with st.form("edit_supplier_form"):
-
-                name = st.text_input(
-                    "Название",
-                    value=str(row.get("name") or "")
-                )
-
-                types = [
-                    "material_supplier",
-                    "subcontractor",
-                    "both"
-                ]
-                current_type = str(row.get("type") or "material_supplier")
-                type_index = types.index(current_type) if current_type in types else 0
-
-                supplier_type = st.selectbox(
-                    "Тип поставщика",
-                    types,
-                    index=type_index
-                )
-
-                contact_person = st.text_input(
-                    "Контактное лицо",
-                    value=str(row.get("contact_person") or "")
-                )
-                phone = st.text_input(
-                    "Телефон",
-                    value=str(row.get("phone") or "")
-                )
-                email = st.text_input(
-                    "Email",
-                    value=str(row.get("email") or "")
-                )
-                category = st.text_input(
-                    "Категория",
-                    value=str(row.get("category") or "")
-                )
-                conditions = st.text_area(
-                    "Условия",
-                    value=str(row.get("conditions") or "")
-                )
-                contact_info = st.text_area(
-                    "Контактная информация",
-                    value=str(row.get("contact_info") or "")
-                )
-
-                save = st.form_submit_button("Сохранить изменения")
-
-                if save:
+                name=st.text_input("Название",value=str(row.get("name") or ""))
+                types=["material_supplier","subcontractor","both"]
+                current_type=str(row.get("type") or "material_supplier")
+                supplier_type=st.selectbox("Тип поставщика",types,index=types.index(current_type) if current_type in types else 0)
+                contact_person=st.text_input("Контактное лицо",value=str(row.get("contact_person") or ""))
+                phone=st.text_input("Телефон",value=str(row.get("phone") or ""))
+                email=st.text_input("Email",value=str(row.get("email") or ""))
+                category=st.text_input("Категория",value=str(row.get("category") or ""))
+                conditions=st.text_area("Условия",value=str(row.get("conditions") or ""))
+                contact_info=st.text_area("Контактная информация",value=str(row.get("contact_info") or ""))
+                if st.form_submit_button("Сохранить изменения"):
                     if not name.strip():
                         st.warning("Название поставщика не может быть пустым.")
                     else:
                         run_query(
-                            """
-                            UPDATE reklet.suppliers
-                            SET
-                                name = %s,
-                                type = %s,
-                                contact_info = %s,
-                                contact_person = %s,
-                                phone = %s,
-                                email = %s,
-                                category = %s,
-                                conditions = %s
-                            WHERE id = %s
-                            """,
-                            (
-                                name.strip(),
-                                supplier_type,
-                                contact_info.strip() or None,
-                                contact_person.strip() or None,
-                                phone.strip() or None,
-                                email.strip() or None,
-                                category.strip() or None,
-                                conditions.strip() or None,
-                                selected_id
-                            )
+                            """UPDATE reklet.suppliers SET name=%s,type=%s,contact_info=%s,
+                                      contact_person=%s,phone=%s,email=%s,category=%s,conditions=%s
+                               WHERE id=%s""",
+                            (name.strip(),supplier_type,contact_info.strip() or None,
+                             contact_person.strip() or None,phone.strip() or None,email.strip() or None,
+                             category.strip() or None,conditions.strip() or None,selected_id)
                         )
                         st.success("Данные поставщика изменены.")
                         st.rerun()
 
-            st.markdown("---")
-            st.warning(
-                "Удаление безопасное. Поставщик не будет удалён, если он используется "
-                "в материалах, движениях или других связанных данных."
-            )
-
-            confirm_supplier = st.checkbox(
-                "Я подтверждаю удаление выбранного поставщика.",
-                key="confirm_supplier_delete_new"
-            )
-
-            if st.button(
-                "Удалить поставщика",
-                key="delete_supplier_safe_new",
-                disabled=not confirm_supplier
-            ):
-                try:
-                    used = run_query(
-                        """
-                        SELECT
-                            (SELECT COUNT(*) FROM reklet.material_suppliers WHERE supplier_id = %s) AS material_links,
-                            (SELECT COUNT(*) FROM reklet.material_transactions WHERE supplier_id = %s) AS transactions
-                        """,
-                        (selected_id, selected_id),
-                        fetch=True
+            with st.expander("Удаление поставщика",expanded=False):
+                st.warning(
+                    "Безопасное удаление: поставщик не будет удалён, "
+                    "если он используется материалами или движениями."
+                )
+                confirm=st.checkbox("Я подтверждаю удаление выбранного поставщика.",key="confirm_supplier_delete")
+                if st.button("Удалить поставщика",key="delete_supplier_safe",disabled=not confirm):
+                    used=run_query(
+                        """SELECT
+                             (SELECT COUNT(*) FROM reklet.material_suppliers WHERE supplier_id=%s) AS material_links,
+                             (SELECT COUNT(*) FROM reklet.material_transactions WHERE supplier_id=%s) AS transactions""",
+                        (selected_id,selected_id),fetch=True
                     )
-
-                    material_links = int(used.iloc[0]["material_links"])
-                    transactions = int(used.iloc[0]["transactions"])
-
-                    if material_links > 0 or transactions > 0:
-                        st.error(
-                            "Удаление невозможно: поставщик используется в связанных данных. "
-                            "Сначала удалите/замените эти связи."
-                        )
+                    if int(used.iloc[0]["material_links"])>0 or int(used.iloc[0]["transactions"])>0:
+                        st.error("Удаление невозможно: поставщик используется в связанных данных.")
                     else:
-                        run_query(
-                            "DELETE FROM reklet.suppliers WHERE id = %s",
-                            (selected_id,)
-                        )
+                        run_query("DELETE FROM reklet.suppliers WHERE id=%s",(selected_id,))
                         st.success("Поставщик удалён.")
                         st.rerun()
-
-                except Exception as e:
-                    st.error("Поставщика нельзя удалить безопасно.")
-                    st.code(str(e))
-
 
 # ============================================================
 # PRODUCTION
