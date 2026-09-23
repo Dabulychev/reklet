@@ -1543,10 +1543,11 @@ elif menu == "Объекты":
                                 def add_stage_history(from_idx, to_idx, qty):
                                     for transition in range(from_idx + 1, to_idx + 1):
                                         if transition == 0:
-                                            statements.append((
-                                                "INSERT INTO reklet.production_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'start',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                                (qty, object_id, tid, tid)
-                                            ))
+                                            # В существующей production_transactions разрешённая история
+                                            # не содержит отдельной операции start. Переход на производство
+                                            # фиксируется операцией completed при выходе в готовую продукцию.
+                                            # Само количество на этапе хранится в object_items.qty_production.
+                                            continue
                                         elif transition == 1:
                                             statements.append((
                                                 "INSERT INTO reklet.production_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'completed',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
@@ -1580,10 +1581,10 @@ elif menu == "Объекты":
                                                 ),
                                             ])
                                         elif transition == 5:
-                                            statements.append((
-                                                "INSERT INTO reklet.installation_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'start',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                                (qty, object_id, tid, tid)
-                                            ))
+                                            # Отдельная операция start для монтажа не используется в
+                                            # существующей истории; наличие количества в qty_installing
+                                            # фиксируется непосредственно в object_items.
+                                            continue
                                         elif transition == 6:
                                             statements.append((
                                                 "INSERT INTO reklet.installation_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'complete',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
