@@ -2581,7 +2581,29 @@ elif menu == "Склад материалов":
         supplier_options = ["Без поставщика"] + ([str(x) for x in suppliers["name"].tolist()] if not suppliers.empty else [])
         supplier_map = {str(row["name"]): int(row["id"]) for _, row in suppliers.iterrows()} if not suppliers.empty else {}
 
-        receipt_df = materials[["id", "name", "unit_name"]].copy()
+        receipt_category_options = ["Все категории", "Без категории"] + (
+            categories["name"].astype(str).tolist()
+            if not categories.empty else []
+        )
+        receipt_category_label = st.selectbox(
+            "Категория материала",
+            receipt_category_options,
+            key="receipt_category_batch"
+        )
+
+        receipt_materials = materials.copy()
+        if receipt_category_label == "Без категории":
+            receipt_materials = receipt_materials[
+                receipt_materials["category_id"].isna()
+            ].copy()
+        elif receipt_category_label != "Все категории":
+            receipt_materials = receipt_materials[
+                receipt_materials["category_name"].fillna("").astype(str).eq(
+                    receipt_category_label
+                )
+            ].copy()
+
+        receipt_df = receipt_materials[["id", "name", "unit_name"]].copy()
         receipt_df.insert(0, "Выбрать", False)
         receipt_df["Количество"] = 0.0
         receipt_df["Цена"] = 0.0
