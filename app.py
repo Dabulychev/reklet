@@ -1276,42 +1276,37 @@ elif menu == "Объекты":
 
     elif sub == "Состав объекта":
 
-        # Каскадный выбор: сначала заказчик, затем только его объекты.
-        # После выбора объекта сразу открывается таблица изделий выбранного заказчика.
+        # Для состава объекта нужен только один отбор — по объекту.
+        # Новые объекты находятся сверху.
         all_objects = get_objects()
 
-        client_filter_options = ["Все заказчики"] + (
-            sorted([
-                str(x).strip()
-                for x in all_objects["client_name"].fillna("").astype(str).unique()
-                if str(x).strip()
-            ]) if not all_objects.empty else []
-        )
+        if all_objects.empty:
+            st.info("Объекты отсутствуют.")
+            st.stop()
 
-        client_filter = st.selectbox(
-            "Отбор по заказчику",
-            client_filter_options,
-            key="object_content_client_filter"
-        )
+        objects_for_filter = all_objects.copy()
+        if "created_at" in objects_for_filter.columns:
+            objects_for_filter["_sort_date"] = pd.to_datetime(
+                objects_for_filter["created_at"], errors="coerce"
+            )
+            objects_for_filter = objects_for_filter.sort_values(
+                ["_sort_date", "id"], ascending=[False, False], na_position="last"
+            )
+        else:
+            objects_for_filter = objects_for_filter.sort_values("id", ascending=False)
 
-        filtered_objects = all_objects.copy()
-        if client_filter != "Все заказчики":
-            filtered_objects = filtered_objects[
-                filtered_objects["client_name"].fillna("").astype(str).str.strip().eq(client_filter)
-            ].copy()
-
-        # Единственный выбор объекта в этом разделе.
         object_options = []
         object_map = {}
-        for _, row in filtered_objects.sort_values("object_name").iterrows():
+        for _, row in objects_for_filter.iterrows():
             oid = int(row["id"])
-            label = f"{oid} — {row['object_name']}"
+            object_name = str(row.get("object_name", "") or "").strip()
+            client_name = str(row.get("client_name", "") or "").strip()
+            address = str(row.get("address", "") or "").strip()
+            label = f"{oid} — {object_name} — {client_name}"
+            if address:
+                label += f" — {address}"
             object_options.append(label)
             object_map[label] = row
-
-        if not object_options:
-            st.info("Для выбранного заказчика нет объектов.")
-            st.stop()
 
         selected_object_label = st.selectbox(
             "Отбор по объекту",
@@ -1321,14 +1316,59 @@ elif menu == "Объекты":
 
         object_row = object_map[selected_object_label]
         object_id = int(object_row["id"])
-        object_client_name = str(object_row["client_name"] or "").strip()
+        object_client_name = str(object_row.get("client_name", "") or "").strip()
+        object_name = str(object_row.get("object_name", "") or "").strip()
 
-        st.subheader(f"{object_row['object_name']} / {object_client_name}")
+        st.subheader(f"{object_name} / {object_client_name}")
 
-        # ====================================================
-        # ДОБАВЛЕНИЕ ИЗДЕЛИЙ — СРАЗУ ПОСЛЕ ВЫБОРА ОБЪЕКТА
-        # ====================================================
-        st.subheader("Добавить изделия")
+        # Сначала показываем изделия, уже созданные в объекте.
+        items = get_object_items(object_id)
+        if items.empty:
+            st.info("Для этого объекта ещё не созданы изделия.")
+        else:
+            st.subheader("Изделия объекта")
+            display = items[[
+                "id", "item_name", "quantity", "qty_new", "qty_production",
+                "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"
+            ]].copy()
+
+            edited = data_editor_ru(
+                display,
+                key=f"object_items_{object_id}",
+                width="stretch"
+            )
+
+            if st.button("Сохранить количество", key=f"save_items_{object_id}"):
+                for _, row in edited.iterrows():
+                    qty_new = safe_int(row["qty_new"])
+                    qty_production = safe_int(row["qty_production"])
+                    qty_ready = safe_int(row["qty_ready"])
+                    qty_shipped = safe_int(row["qty_shipped"])
+                    qty_arrived = safe_int(row["qty_arrived"])
+                    qty_installing = safe_int(row["qty_installing"])
+                    qty_installed = safe_int(row["qty_installed"])
+                    total = qty_new + qty_production + qty_ready + qty_shipped + qty_arrived + qty_installing + qty_installed
+
+                    run_query(
+                        """
+                        UPDATE reklet.object_items
+                        SET item_name=%s, quantity=%s, quantity_needed=%s,
+                            qty_new=%s, qty_production=%s, qty_ready=%s,
+                            qty_shipped=%s, qty_arrived=%s, qty_installing=%s, qty_installed=%s
+                        WHERE id=%s
+                        """,
+                        (row["item_name"], total, total, qty_new, qty_production, qty_ready,
+                         qty_shipped, qty_arrived, qty_installing, qty_installed, safe_int(row["id"]))
+                    )
+
+                st.success("Сохранено.")
+                st.rerun()
+
+        # Для нового объекта эта таблица используется для первоначального
+        # заполнения. Дополнительного отбора по заказчику здесь нет:
+        # список изделий определяется заказчиком выбранного объекта.
+        st.markdown("---")
+        st.subheader("Заполнение изделиями")
 
         templates = get_templates()
         if not object_client_name:
@@ -1339,7 +1379,7 @@ elif menu == "Объекты":
             ].copy()
 
             if templates.empty:
-                st.info("У выбранного заказчика пока нет изделий.")
+                st.info("Для заказчика этого объекта ещё не созданы изделия.")
             else:
                 add_df = templates[["id", "name", "client_name", "category"]].copy()
                 add_df.insert(0, "Выбрать", False)
@@ -1406,54 +1446,6 @@ elif menu == "Объекты":
                         run_transaction(statements)
                         st.success(f"Добавлено изделий: {len(selected_rows)}.")
                         st.rerun()
-
-        # ====================================================
-        # УЖЕ ДОБАВЛЕННЫЕ ИЗДЕЛИЯ ОБЪЕКТА — НИЖЕ
-        # ====================================================
-        st.markdown("---")
-        st.subheader("Изделия объекта")
-
-        items = get_object_items(object_id)
-
-        if items.empty:
-            st.info("В этом объекте пока нет изделий.")
-        else:
-            display = items[[
-                "id", "item_name", "quantity", "qty_new", "qty_production",
-                "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"
-            ]].copy()
-
-            edited = data_editor_ru(
-                display,
-                key=f"object_items_{object_id}",
-                width="stretch"
-            )
-
-            if st.button("Сохранить количество", key=f"save_items_{object_id}"):
-                for _, row in edited.iterrows():
-                    qty_new = safe_int(row["qty_new"])
-                    qty_production = safe_int(row["qty_production"])
-                    qty_ready = safe_int(row["qty_ready"])
-                    qty_shipped = safe_int(row["qty_shipped"])
-                    qty_arrived = safe_int(row["qty_arrived"])
-                    qty_installing = safe_int(row["qty_installing"])
-                    qty_installed = safe_int(row["qty_installed"])
-                    total = qty_new + qty_production + qty_ready + qty_shipped + qty_arrived + qty_installing + qty_installed
-
-                    run_query(
-                        """
-                        UPDATE reklet.object_items
-                        SET item_name=%s, quantity=%s, quantity_needed=%s,
-                            qty_new=%s, qty_production=%s, qty_ready=%s,
-                            qty_shipped=%s, qty_arrived=%s, qty_installing=%s, qty_installed=%s
-                        WHERE id=%s
-                        """,
-                        (row["item_name"], total, total, qty_new, qty_production, qty_ready,
-                         qty_shipped, qty_arrived, qty_installing, qty_installed, safe_int(row["id"]))
-                    )
-
-                st.success("Сохранено.")
-                st.rerun()
 
         items_print = get_object_items(object_id)
         rows = ""
