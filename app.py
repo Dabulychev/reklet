@@ -1277,13 +1277,62 @@ elif menu == "Объекты":
     elif sub == "Состав объекта":
 
         objects = get_objects()
-        object_filter_options = ["Все объекты"] + (
-            [str(x) for x in objects["object_name"].fillna("").astype(str).str.strip().loc[lambda x: x != ""].sort_values().unique()]
+
+        # Сначала отбор по заказчику, затем каскадный отбор по объекту.
+        # Список объектов автоматически ограничивается выбранным заказчиком.
+        client_filter_options = ["Все заказчики"] + (
+            [
+                str(x)
+                for x in objects["client_name"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .loc[lambda x: x != ""]
+                .sort_values()
+                .unique()
+            ]
             if not objects.empty else []
         )
-        object_filter = st.selectbox("Отбор по объекту", object_filter_options, key="object_content_filter")
+
+        client_filter = st.selectbox(
+            "Отбор по заказчику",
+            client_filter_options,
+            key="object_content_client_filter"
+        )
+
+        filtered_objects = objects.copy()
+
+        if client_filter != "Все заказчики":
+            filtered_objects = filtered_objects[
+                filtered_objects["client_name"].fillna("").astype(str).str.strip().eq(client_filter)
+            ].copy()
+
+        object_filter_options = ["Все объекты"] + (
+            [
+                str(x)
+                for x in filtered_objects["object_name"]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+                .loc[lambda x: x != ""]
+                .sort_values()
+                .unique()
+            ]
+            if not filtered_objects.empty else []
+        )
+
+        object_filter = st.selectbox(
+            "Отбор по объекту",
+            object_filter_options,
+            key="object_content_filter"
+        )
+
         if object_filter != "Все объекты":
-            objects = objects[objects["object_name"].eq(object_filter)].copy()
+            filtered_objects = filtered_objects[
+                filtered_objects["object_name"].eq(object_filter)
+            ].copy()
+
+        objects = filtered_objects
 
         if objects.empty:
 
