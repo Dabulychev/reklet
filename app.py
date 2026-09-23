@@ -964,9 +964,7 @@ if menu == "Клиенты":
 
 # OBJECTS
 # ============================================================
-
 elif menu == "Объекты":
-
     st.header("Объекты")
 
     sub = render_button_nav(
@@ -985,482 +983,63 @@ elif menu == "Объекты":
 
     st.markdown("---")
 
-
-    # ========================================================
-    # OBJECT LIST
-    # ========================================================
-
+    # ------------------------------------------------------------
+    # СПИСОК ОБЪЕКТОВ
+    # ------------------------------------------------------------
     if sub == "Список объектов":
-
-        clients = get_clients()
-
         df = get_objects()
-
-        object_filter_options = ["Все объекты"] + (
-            [str(x) for x in df["object_name"].fillna("").astype(str).str.strip().loc[lambda x: x != ""].sort_values().unique()]
-            if not df.empty else []
-        )
-        object_filter = st.selectbox("Отбор по объекту", object_filter_options, key="object_list_filter")
-        if object_filter != "Все объекты":
-            df = df[df["object_name"].eq(object_filter)].copy()
-
-        if not df.empty:
-
-            display = df[
-                [
-                    "id",
-                    "object_name",
-                    "client_name",
-                    "address"
-                ]
-            ].copy()
-
-            edited = data_editor_ru(
-                display,
-                key="objects_editor",
-                width="stretch"
-            )
-
-            if st.button(
-                "Сохранить изменения",
-                key="save_objects"
-            ):
-
-                for _, row in edited.iterrows():
-
-                    run_query(
-                        """
-                        UPDATE reklet.objects
-
-                        SET
-                            object_name = %s,
-                            address = %s
-
-                        WHERE id = %s
-                        """,
-                        (
-                            row["object_name"],
-                            row["address"],
-                            safe_int(row["id"])
-                        )
-                    )
-
-                st.success("Сохранено.")
-
-                st.rerun()
-
-
-    # ========================================================
-    # ADD OBJECT
-    # ========================================================
-
-    elif sub == "Добавить объект":
-
-            clients = get_clients()
-
-            st.markdown("---")
-
-            st.subheader("Создать объект")
-
-            client_map = {}
-
-            if not clients.empty:
-
-                client_map = {
-                    str(row["name"]): int(row["id"])
-                    for _, row in clients.iterrows()
-                }
-
-
-            with st.form("create_object"):
-
-                client_name = st.selectbox(
-                    "Клиент",
-                    list(client_map.keys())
-                    if client_map
-                    else []
-                )
-
-                object_name = st.text_input(
-                    "Название объекта"
-                )
-
-                address = st.text_input(
-                    "Адрес"
-                )
-
-                phone = st.text_input(
-                    "Телефон"
-                )
-
-                contact_person = st.text_input(
-                    "Контактное лицо"
-                )
-
-                notes = st.text_area(
-                    "Примечания"
-                )
-
-                c1, c2 = st.columns(2)
-
-                with c1:
-
-                    distance = st.number_input(
-                        "Расстояние доставки (км)",
-                        min_value=0.0,
-                        value=0.0
-                    )
-
-                    delivery_cost = st.number_input(
-                        "Стоимость доставки",
-                        min_value=0.0,
-                        value=0.0
-                    )
-
-                    contract_date = st.date_input(
-                        "Дата договора",
-                        value=None
-                    )
-
-                    production_start = st.date_input(
-                        "Начало производства",
-                        value=None
-                    )
-
-                    production_end = st.date_input(
-                        "Окончание производства",
-                        value=None
-                    )
-
-                with c2:
-
-                    installation_date = st.date_input(
-                        "Дата монтажа",
-                        value=None
-                    )
-
-                    installation_end = st.date_input(
-                        "Окончание монтажа",
-                        value=None
-                    )
-
-                submit = st.form_submit_button(
-                    "Создать объект"
-                )
-
-                if submit:
-
-                    if (
-                        not client_name
-                        or not object_name.strip()
-                    ):
-
-                        st.warning(
-                            "Необходимо указать клиента и название объекта."
-                        )
-
-                    else:
-
-                        run_query(
-                            """
-                            INSERT INTO reklet.objects
-                            (
-                                client_id,
-                                object_name,
-                                address,
-                                phone,
-                                contact_person,
-                                notes,
-                                transport_distance_km,
-                                delivery_cost,
-                                contract_date,
-                                production_start_date,
-                                production_end_date,
-                                installation_date,
-                                installation_end_date
-                            )
-
-                            VALUES
-                            (
-                                %s,%s,%s,%s,%s,%s,
-                                %s,%s,%s,%s,%s,%s,%s
-                            )
-                            """,
-                            (
-                                client_map[client_name],
-                                object_name,
-                                address,
-                                phone,
-                                contact_person,
-                                notes,
-                                distance,
-                                delivery_cost,
-                                contract_date,
-                                production_start,
-                                production_end,
-                                installation_date,
-                                installation_end
-                            )
-                        )
-
-                        st.success(
-                            "Объект создан."
-                        )
-
-                        st.rerun()
-
-
-
-
-    # ========================================================
-    # OBJECT CORRECTION
-    # ========================================================
-
-    elif sub == "Корректировка":
-
-        objects = get_objects()
-        object_options = ["Все объекты"] + (
-            [str(x) for x in objects["object_name"].fillna("").astype(str).str.strip().loc[lambda x: x != ""].sort_values().unique()]
-            if not objects.empty else []
-        )
-        selected_filter = st.selectbox("Отбор по объекту", object_options, key="object_correction_filter")
-        if selected_filter != "Все объекты":
-            objects = objects[objects["object_name"].eq(selected_filter)].copy()
-
-        if objects.empty:
-            st.info("Нет объектов для корректировки.")
+        if df.empty:
+            st.info("Объектов нет.")
         else:
-            object_map = {f"{row['id']} — {row['object_name']}": int(row['id']) for _, row in objects.iterrows()}
-            label = st.selectbox("Объект", list(object_map.keys()), key="object_correction_select")
-            object_id = object_map[label]
-            row = objects[objects["id"] == object_id].iloc[0]
-
-            with st.form("edit_object_form"):
-                object_name = st.text_input("Название объекта", value=str(row["object_name"] or ""))
-                address = st.text_input("Адрес", value=str(row["address"] or ""))
-                phone = st.text_input("Телефон", value=str(row.get("phone", "") or ""))
-                contact_person = st.text_input("Контактное лицо", value=str(row.get("contact_person", "") or ""))
-                notes = st.text_area("Примечания", value=str(row.get("notes", "") or ""))
-                save = st.form_submit_button("Сохранить изменения")
-                if save:
-                    if not object_name.strip():
-                        st.warning("Название объекта не может быть пустым.")
-                    else:
-                        run_query(
-                            """UPDATE reklet.objects
-                            SET object_name=%s, address=%s, phone=%s, contact_person=%s, notes=%s
-                            WHERE id=%s""",
-                            (object_name.strip(), address.strip() or None, phone.strip() or None,
-                             contact_person.strip() or None, notes.strip() or None, object_id)
-                        )
-                        st.success("Объект изменён.")
-                        st.rerun()
-
-            st.markdown("---")
-            st.warning("Удаление объекта безопасное: объект нельзя удалить, если в нём есть изделия.")
-            confirm = st.checkbox("Я подтверждаю удаление выбранного объекта.", key="confirm_delete_object")
-            if st.button("Удалить объект", key="delete_object_button", disabled=not confirm):
-                used = run_query(
-                    "SELECT COUNT(*) AS cnt FROM reklet.object_items WHERE object_id=%s",
-                    (object_id,), fetch=True
-                )
-                if int(used.iloc[0]["cnt"]) > 0:
-                    st.error("Удаление невозможно: в объекте есть изделия.")
-                else:
-                    run_query("DELETE FROM reklet.objects WHERE id=%s", (object_id,))
-                    st.success("Объект удалён.")
-                    st.rerun()
-
-    # ========================================================
-    # OBJECT CONTENT
-    # ========================================================
-
-    elif sub == "Состав объекта":
-
-        # СПЕЦИФИКАЦИЯ ОБЪЕКТА: сначала заказчик, затем объект.
-        # Здесь только просмотр состава объекта — без добавления изделий.
-        clients = get_clients()
-        objects = get_objects()
-
-        if clients.empty:
-            st.info("Заказчики отсутствуют.")
-            st.stop()
-
-        client_map = {
-            f"{int(row['id'])} — {str(row['name'] or '').strip()}": int(row['id'])
-            for _, row in clients.iterrows()
-        }
-
-        selected_client_label = st.selectbox(
-            "Отбор по заказчику",
-            list(client_map.keys()),
-            key="object_spec_client_filter"
-        )
-        selected_client_id = client_map[selected_client_label]
-
-        client_objects = objects[objects["client_id"].fillna(-1).astype(int).eq(selected_client_id)].copy()
-        client_objects = client_objects.sort_values("id", ascending=False)
-
-        if client_objects.empty:
-            st.info("У выбранного заказчика ещё нет объектов.")
-            st.stop()
-
-        object_map = {}
-        object_options = []
-        for _, row in client_objects.iterrows():
-            oid = int(row["id"])
-            object_name = str(row.get("object_name", "") or "").strip()
-            address = str(row.get("address", "") or "").strip()
-            label = f"{oid} — {object_name}"
-            if address:
-                label += f" — {address}"
-            object_options.append(label)
-            object_map[label] = oid
-
-        selected_object_label = st.selectbox(
-            "Отбор по объекту",
-            object_options,
-            key="object_spec_object_filter"
-        )
-        object_id = object_map[selected_object_label]
-
-        selected_object = client_objects[client_objects["id"].eq(object_id)].iloc[0]
-        object_name = str(selected_object.get("object_name", "") or "").strip()
-        client_name = str(selected_object.get("client_name", "") or "").strip()
-
-        st.subheader(f"Состав объекта: {object_name}")
-        st.caption(f"Заказчик: {client_name}")
-
-        items = get_object_items(object_id)
-        if items.empty:
-            st.info("Для этого объекта ещё не созданы изделия.")
-        else:
-            display = items[[
-                "id", "item_name", "quantity", "qty_new", "qty_production",
-                "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"
-            ]].copy()
-            display.columns = [
-                "ID", "Изделие", "Количество", "Новые", "Производство",
-                "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"
-            ]
-            data_editor_ru(
-                display,
-                key=f"object_specification_{object_id}",
-                width="stretch"
+            object_filter_options = ["Все объекты"] + (
+                sorted(df["object_name"].fillna("").astype(str).str.strip().loc[lambda x: x != ""].unique().tolist())
             )
+            object_filter = st.selectbox("Отбор по объекту", object_filter_options, key="object_list_filter")
+            if object_filter != "Все объекты":
+                df = df[df["object_name"].eq(object_filter)].copy()
+            display = df[["id", "object_name", "client_name", "address"]].copy()
+            display.columns = ["ID", "Объект", "Заказчик", "Адрес"]
+            st.dataframe(display, width="stretch", hide_index=True)
 
+    # ------------------------------------------------------------
+    # ДОБАВИТЬ ИЗДЕЛИЯ НА ОБЪЕКТ
+    # ------------------------------------------------------------
     elif sub == "Добавить изделия на объект":
-
-        # Добавление изделий на объект: выбор объекта и многострочное заполнение.
-        # В составе объекта теперь только просмотр спецификации.
-        # Новые объекты находятся сверху.
-        # Новые объекты находятся сверху.
-        all_objects = get_objects()
-
-        if all_objects.empty:
-            st.info("Объекты отсутствуют.")
-            st.stop()
-
-        objects_for_filter = all_objects.copy()
-        if "created_at" in objects_for_filter.columns:
-            objects_for_filter["_sort_date"] = pd.to_datetime(
-                objects_for_filter["created_at"], errors="coerce"
-            )
-            objects_for_filter = objects_for_filter.sort_values(
-                ["_sort_date", "id"], ascending=[False, False], na_position="last"
-            )
+        objects = get_objects()
+        if objects.empty:
+            st.info("Объектов нет.")
         else:
-            objects_for_filter = objects_for_filter.sort_values(
-                "id", ascending=False
-            )
+            # Новые объекты сверху. ID используется как надёжный второй ключ.
+            objects = objects.sort_values("id", ascending=False).reset_index(drop=True)
+            object_map = {}
+            object_options = []
+            for _, row in objects.iterrows():
+                oid = int(row["id"])
+                name = str(row.get("object_name", "") or "").strip()
+                client = str(row.get("client_name", "") or "").strip()
+                address = str(row.get("address", "") or "").strip()
+                label = f"{oid} — {name} — {client}"
+                if address:
+                    label += f" — {address}"
+                object_options.append(label)
+                object_map[label] = row
 
-        object_options = []
-        object_map = {}
-        for _, row in objects_for_filter.iterrows():
-            oid = int(row["id"])
-            object_name = str(row.get("object_name", "") or "").strip()
-            client_name = str(row.get("client_name", "") or "").strip()
-            address = str(row.get("address", "") or "").strip()
-            label = f"{oid} — {object_name} — {client_name}"
-            if address:
-                label += f" — {address}"
-            object_options.append(label)
-            object_map[label] = row
+            selected_label = st.selectbox("Отбор по объекту", object_options, key="add_items_object_select")
+            object_row = object_map[selected_label]
+            object_id = int(object_row["id"])
+            client_name = str(object_row.get("client_name", "") or "").strip()
+            object_name = str(object_row.get("object_name", "") or "").strip()
 
-        selected_object_label = st.selectbox(
-            "Отбор по объекту",
-            object_options,
-            key="object_content_filter"
-        )
+            st.subheader(f"Добавить изделия на объект: {object_name}")
+            st.caption(f"Заказчик: {client_name}")
 
-        object_row = object_map[selected_object_label]
-        object_id = int(object_row["id"])
-        object_client_name = str(object_row.get("client_name", "") or "").strip()
-        object_name = str(object_row.get("object_name", "") or "").strip()
-
-        st.subheader(f"{object_name} / {object_client_name}")
-
-        # Уже добавленные изделия объекта.
-        items = get_object_items(object_id)
-        if items.empty:
-            st.info("Для этого объекта ещё не созданы изделия.")
-        else:
-            st.subheader("Изделия объекта")
-            display = items[[
-                "id", "item_name", "quantity", "qty_new", "qty_production",
-                "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"
-            ]].copy()
-
-            edited = data_editor_ru(
-                display,
-                key=f"object_items_{object_id}",
-                width="stretch"
-            )
-
-            if st.button("Сохранить количество", key=f"save_items_{object_id}"):
-                for _, row in edited.iterrows():
-                    qty_new = safe_int(row["qty_new"])
-                    qty_production = safe_int(row["qty_production"])
-                    qty_ready = safe_int(row["qty_ready"])
-                    qty_shipped = safe_int(row["qty_shipped"])
-                    qty_arrived = safe_int(row["qty_arrived"])
-                    qty_installing = safe_int(row["qty_installing"])
-                    qty_installed = safe_int(row["qty_installed"])
-                    total = (
-                        qty_new + qty_production + qty_ready + qty_shipped +
-                        qty_arrived + qty_installing + qty_installed
-                    )
-
-                    run_query(
-                        """
-                        UPDATE reklet.object_items
-                        SET item_name=%s, quantity=%s, quantity_needed=%s,
-                            qty_new=%s, qty_production=%s, qty_ready=%s,
-                            qty_shipped=%s, qty_arrived=%s, qty_installing=%s, qty_installed=%s
-                        WHERE id=%s
-                        """,
-                        (
-                            row["item_name"], total, total, qty_new, qty_production,
-                            qty_ready, qty_shipped, qty_arrived, qty_installing,
-                            qty_installed, safe_int(row["id"])
-                        )
-                    )
-
-                st.success("Сохранено.")
-                st.rerun()
-
-        st.markdown("---")
-        st.subheader("Добавить изделия в объект")
-
-        # Изделия подбираются автоматически по заказчику выбранного объекта.
-        # Никакого отдельного отбора по заказчику здесь нет.
-        if not object_client_name:
-            st.warning("У объекта не указан заказчик — нельзя определить список изделий.")
-        else:
             templates = get_templates()
-            templates = templates[
-                templates["client_name"].fillna("").astype(str).str.strip().eq(object_client_name)
-            ].copy()
+            if client_name:
+                templates = templates[
+                    templates["client_name"].fillna("").astype(str).str.strip().eq(client_name)
+                ].copy()
+            else:
+                templates = templates.iloc[0:0].copy()
 
             if templates.empty:
                 st.info("Для заказчика этого объекта ещё не созданы изделия.")
@@ -1468,17 +1047,12 @@ elif menu == "Объекты":
                 add_df = templates[["id", "name", "client_name", "category"]].copy()
                 add_df.insert(0, "Выбрать", False)
                 add_df["Количество"] = 0
-                add_df.columns = [
-                    "Выбрать", "ID", "Изделие", "Заказчик", "Категория", "Количество"
-                ]
+                add_df.columns = ["Выбрать", "ID", "Изделие", "Заказчик", "Категория", "Количество"]
 
-                # Ключевой момент: таблица находится внутри form.
-                # Поэтому установка галочки/ввод количества НЕ вызывает rerun,
-                # не сбрасывает выбранный объект и не возвращает список объектов.
-                with st.form(f"object_add_items_form_{object_id}"):
+                with st.form(f"add_items_form_{object_id}", clear_on_submit=False):
                     edited_add = st.data_editor(
                         add_df,
-                        key=f"object_add_items_editor_{object_id}",
+                        key=f"add_items_editor_{object_id}",
                         width="stretch",
                         hide_index=True,
                         column_config={
@@ -1487,32 +1061,29 @@ elif menu == "Объекты":
                             "Изделие": st.column_config.TextColumn("Изделие", disabled=True),
                             "Заказчик": st.column_config.TextColumn("Заказчик", disabled=True),
                             "Категория": st.column_config.TextColumn("Категория", disabled=True),
-                            "Количество": st.column_config.NumberColumn(
-                                "Количество", min_value=0, step=1, format="%d"
-                            ),
+                            "Количество": st.column_config.NumberColumn("Количество", min_value=0, step=1, format="%d"),
                         },
                         disabled=["ID", "Изделие", "Заказчик", "Категория"],
                     )
-
-                    execute_add = st.form_submit_button(
-                        "Добавить выбранные изделия",
-                        use_container_width=True
-                    )
+                    execute_add = st.form_submit_button("Добавить выбранные изделия", use_container_width=True)
 
                 if execute_add:
                     selected_rows = edited_add[
                         edited_add["Выбрать"].fillna(False)
-                        & (edited_add["Количество"].fillna(0).astype(float) > 0)
-                    ]
+                        & (pd.to_numeric(edited_add["Количество"], errors="coerce").fillna(0) > 0)
+                    ].copy()
 
                     if selected_rows.empty:
                         st.warning("Выберите хотя бы одно изделие и укажите количество.")
                     else:
+                        # Не делаем st.rerun(): после выполнения остаёмся в этом же разделе и объекте.
                         statements = []
-                        for _, row in selected_rows.iterrows():
-                            template_id = safe_int(row["ID"])
-                            qty = safe_int(row["Количество"])
+                        for _, r in selected_rows.iterrows():
+                            template_id = safe_int(r["ID"])
+                            qty = safe_int(r["Количество"])
+                            item_name = str(r["Изделие"] or "").strip()
 
+                            # Сначала увеличиваем существующую строку.
                             statements.append((
                                 """
                                 UPDATE reklet.object_items
@@ -1525,501 +1096,225 @@ elif menu == "Объекты":
                                 (qty, qty, qty, object_id, template_id, template_id)
                             ))
 
+                            # Если строки нет — создаём её.
                             statements.append((
                                 """
                                 INSERT INTO reklet.object_items
-                                (object_id, product_template_id, template_id,
-                                 quantity_needed, item_name, quantity, qty_new, status)
+                                    (object_id, product_template_id, template_id,
+                                     quantity_needed, item_name, quantity, qty_new, status)
                                 SELECT %s,%s,%s,%s,%s,%s,%s,'New'
                                 WHERE NOT EXISTS (
-                                    SELECT 1 FROM reklet.object_items
+                                    SELECT 1
+                                    FROM reklet.object_items
                                     WHERE object_id=%s
                                       AND (product_template_id=%s OR template_id=%s)
                                 )
                                 """,
                                 (
-                                    object_id, template_id, template_id, qty,
-                                    str(row["Изделие"]), qty, qty,
+                                    object_id, template_id, template_id,
+                                    qty, item_name, qty, qty,
                                     object_id, template_id, template_id
                                 )
                             ))
 
-                        run_transaction(statements)
-                        st.success(f"Добавлено изделий: {len(selected_rows)}.")
-                        st.rerun()
+                        try:
+                            run_transaction(statements)
+                            # Проверяем результат сразу, не полагаясь на состояние интерфейса.
+                            saved = get_object_items(object_id)
+                            saved_ids = set()
+                            for _, rr in saved.iterrows():
+                                if pd.notna(rr.get("product_template_id")):
+                                    saved_ids.add(int(rr["product_template_id"]))
+                                if pd.notna(rr.get("template_id")):
+                                    saved_ids.add(int(rr["template_id"]))
 
-        items_print = get_object_items(object_id)
-        rows = ""
-        if not items_print.empty:
-            for i, row in items_print.iterrows():
-                rows += f"""
-                    <tr>
-                        <td>{i + 1}</td>
-                        <td>{escape(str(row['item_name'] or ''))}</td>
-                        <td>{safe_int(row['quantity'])}</td>
-                    </tr>
-                """
+                            expected_ids = {safe_int(x) for x in selected_rows["ID"].tolist()}
+                            if expected_ids.issubset(saved_ids):
+                                st.success(f"Добавлено изделий: {len(selected_rows)}.")
+                            else:
+                                st.error("Операция выполнена не полностью: не все изделия появились в составе объекта.")
+                        except Exception as e:
+                            st.error(f"Не удалось добавить изделия: {e}")
 
-        html = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Спецификация</title>
-            <style>
-                body {{ font-family: Arial; margin: 40px; }}
-                table {{ width: 100%; border-collapse: collapse; }}
-                th, td {{ border: 1px solid #999; padding: 8px; }}
-                th {{ background: #eee; }}
-            </style>
-        </head>
-        <body>
-            <h2>Объект Спецификация</h2>
-            <p><b>Клиент:</b> {escape(str(object_row['client_name'] or ''))}</p>
-            <p><b>Объект:</b> {escape(str(object_row['object_name'] or ''))}</p>
-            <p><b>Адрес:</b> {escape(str(object_row['address'] or ''))}</p>
-            <table>
-                <tr><th>No.</th><th>Изделие</th><th>Количество</th></tr>
-                {rows}
-            </table>
-            <script>window.print();</script>
-        </body>
-        </html>
-        """
+            st.markdown("---")
+            current_items = get_object_items(object_id)
+            st.subheader("Изделия объекта")
+            if current_items.empty:
+                st.info("Для этого объекта ещё не созданы изделия.")
+            else:
+                view = current_items[["id", "item_name", "quantity", "qty_new", "qty_production", "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"]].copy()
+                view.columns = ["ID", "Изделие", "Количество", "Новые", "Производство", "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"]
+                st.dataframe(view, width="stretch", hide_index=True)
 
-        st.download_button(
-            "Скачать спецификацию HTML",
-            data=html,
-            file_name=f"specification_{object_id}.html",
-            mime="text/html"
-        )
-
-    else:
-
-        st.subheader(
-            "Потребность в материалах"
-        )
-
+    # ------------------------------------------------------------
+    # СОСТАВ ОБЪЕКТА — ТОЛЬКО ПРОСМОТР
+    # ------------------------------------------------------------
+    elif sub == "Состав объекта":
+        clients = get_clients()
         objects = get_objects()
-
-        if objects.empty:
-
-            st.info(
-                "Нет объектов."
-            )
-
+        if clients.empty:
+            st.info("Заказчики отсутствуют.")
         else:
+            client_map = {
+                f"{int(row['id'])} — {str(row['name'] or '').strip()}": int(row['id'])
+                for _, row in clients.iterrows()
+            }
+            selected_client_label = st.selectbox("Отбор по заказчику", list(client_map.keys()), key="spec_client_select")
+            selected_client_id = client_map[selected_client_label]
 
+            client_objects = objects[objects["client_id"].fillna(-1).astype(int).eq(selected_client_id)].sort_values("id", ascending=False).copy()
+            if client_objects.empty:
+                st.info("У выбранного заказчика ещё нет объектов.")
+            else:
+                object_map = {}
+                object_options = []
+                for _, row in client_objects.iterrows():
+                    oid = int(row["id"])
+                    label = f"{oid} — {str(row['object_name'] or '').strip()}"
+                    object_options.append(label)
+                    object_map[label] = oid
+
+                selected_object_label = st.selectbox("Отбор по объекту", object_options, key="spec_object_select")
+                object_id = object_map[selected_object_label]
+                row = client_objects[client_objects["id"] == object_id].iloc[0]
+
+                st.subheader(f"Состав объекта: {row['object_name']}")
+                items = get_object_items(object_id)
+                if items.empty:
+                    st.info("Для этого объекта ещё не созданы изделия.")
+                else:
+                    display = items[["id", "item_name", "quantity", "qty_new", "qty_production", "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"]].copy()
+                    display.columns = ["ID", "Изделие", "Количество", "Новые", "Производство", "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"]
+                    st.dataframe(display, width="stretch", hide_index=True)
+
+    # ------------------------------------------------------------
+    # ПОТРЕБНОСТЬ В МАТЕРИАЛАХ
+    # ------------------------------------------------------------
+    elif sub == "Потребность в материалах":
+        objects = get_objects()
+        if objects.empty:
+            st.info("Нет объектов.")
+        else:
+            objects = objects.sort_values("id", ascending=False).copy()
             object_map = {
-                f"{row['id']} — "
-                f"{row['object_name']} — "
-                f"{row['client_name']}":
-                    int(row["id"])
-
+                f"{int(row['id'])} — {row['object_name']} — {row['client_name']}": int(row["id"])
                 for _, row in objects.iterrows()
             }
-
-            selected = st.selectbox(
-                "Объект",
-                list(object_map.keys()),
-                key="material_requirement_object"
-            )
-
-            object_id = object_map[
-                selected
-            ]
-
-            object_row = objects[
-                objects["id"] == object_id
-            ].iloc[0]
-
-            items = get_object_items(
-                object_id
-            )
+            selected = st.selectbox("Объект", list(object_map.keys()), key="material_requirement_object")
+            object_id = object_map[selected]
+            object_row = objects[objects["id"] == object_id].iloc[0]
+            items = get_object_items(object_id)
 
             if items.empty:
-
-                st.info(
-                    "К этому объекту не привязаны изделия."
-                )
-
+                st.info("К этому объекту не привязаны изделия.")
             else:
-
                 requirements = run_query(
                     """
                     SELECT
-
                         oi.id AS object_item_id,
-
                         oi.item_name,
-
-                        oi.quantity
-                            AS product_quantity,
-
+                        oi.quantity AS product_quantity,
                         ptm.material_id,
-
-                        m.name
-                            AS material_name,
-
-                        u.name
-                            AS unit_name,
-
+                        m.name AS material_name,
+                        u.name AS unit_name,
                         ptm.quantity_per_unit,
-
-                        COALESCE(
-                            ptm.waste_coefficient,
-                            m.default_waste_coefficient,
-                            1
-                        ) AS waste_coefficient,
-
+                        COALESCE(ptm.waste_coefficient, m.default_waste_coefficient, 1) AS waste_coefficient,
                         m.cost_per_unit,
-
                         m.stock_quantity
-
                     FROM reklet.object_items oi
-
                     JOIN reklet.product_templates pt
-
-                        ON pt.id = COALESCE(
-                            oi.product_template_id,
-                            oi.template_id
-                        )
-
-                    JOIN
-                        reklet.product_template_materials ptm
-
-                        ON ptm.product_template_id =
-                           pt.id
-
-                    JOIN reklet.materials m
-
-                        ON m.id = ptm.material_id
-
-                    LEFT JOIN reklet.units u
-
-                        ON u.id = m.unit_id
-
+                      ON pt.id = COALESCE(oi.product_template_id, oi.template_id)
+                    JOIN reklet.product_template_materials ptm
+                      ON ptm.product_template_id = pt.id
+                    JOIN reklet.materials m ON m.id = ptm.material_id
+                    LEFT JOIN reklet.units u ON u.id = m.unit_id
                     WHERE oi.object_id = %s
-
-                    ORDER BY
-                        oi.item_name,
-                        m.name
+                    ORDER BY oi.item_name, m.name
                     """,
-                    (object_id,),
-                    fetch=True
+                    (object_id,), fetch=True
                 )
-
                 if requirements.empty:
-
-                    st.warning(
-                        "No material specifications are "
-                        "defined for the products of this object."
-                    )
-
+                    st.warning("Для изделий этого объекта ещё не создана спецификация материалов.")
                 else:
+                    requirements["required_quantity"] = requirements["product_quantity"] * requirements["quantity_per_unit"] * requirements["waste_coefficient"]
+                    requirements["material_cost"] = requirements["required_quantity"] * requirements["cost_per_unit"]
+                    st.dataframe(requirements[["item_name", "product_quantity", "material_name", "unit_name", "quantity_per_unit", "waste_coefficient", "required_quantity", "cost_per_unit", "material_cost"]], width="stretch", hide_index=True)
 
-                    requirements[
-                        "required_quantity"
-                    ] = (
-                        requirements["product_quantity"]
-                        *
-                        requirements["quantity_per_unit"]
-                        *
-                        requirements["waste_coefficient"]
-                    )
-
-                    requirements[
-                        "material_cost"
-                    ] = (
-                        requirements[
-                            "required_quantity"
-                        ]
-                        *
-                        requirements[
-                            "cost_per_unit"
-                        ]
-                    )
-
-                    st.markdown(
-                        "### Потребность в материалах by Изделие"
-                    )
-
-                    product_view = requirements[
-                        [
-                            "item_name",
-                            "product_quantity",
-                            "material_name",
-                            "unit_name",
-                            "quantity_per_unit",
-                            "waste_coefficient",
-                            "required_quantity",
-                            "cost_per_unit",
-                            "material_cost"
-                        ]
-                    ].copy()
-
-                    st.dataframe(
-                        product_view,
-                        width="stretch",
-                        hide_index=True
-                    )
-
-                    st.markdown(
-                        "### Общая потребность в материалах"
-                    )
-
-                    total_materials = (
-                        requirements
-                        .groupby(
-                            [
-                                "material_id",
-                                "material_name",
-                                "unit_name",
-                                "stock_quantity",
-                                "cost_per_unit"
-                            ],
-                            dropna=False
-                        )
-                        .agg(
-                            required_quantity=(
-                                "required_quantity",
-                                "sum"
-                            ),
-                            material_cost=(
-                                "material_cost",
-                                "sum"
-                            )
-                        )
-                        .reset_index()
-                    )
-
-                    total_materials[
-                        "shortage"
-                    ] = (
-                        total_materials[
-                            "required_quantity"
-                        ]
-                        -
-                        total_materials[
-                            "stock_quantity"
-                        ]
-                    ).clip(
-                        lower=0
-                    )
-
-                    total_view = total_materials[
-                        [
-                            "material_name",
-                            "unit_name",
-                            "required_quantity",
-                            "stock_quantity",
-                            "shortage",
-                            "cost_per_unit",
-                            "material_cost"
-                        ]
-                    ].copy()
-
-                    st.dataframe(
-                        total_view,
-                        width="stretch",
-                        hide_index=True
-                    )
-
-                    total_cost = (
-                        total_materials[
-                            "material_cost"
-                        ].sum()
-                    )
-
-                    st.metric(
-                        "Расчётная стоимость материалов",
-                        money(total_cost)
-                    )
-
-                    html_rows = ""
-
-                    for i, row in total_materials.iterrows():
-
-                        html_rows += f"""
-                        <tr>
-
-                            <td>
-                                {i + 1}
-                            </td>
-
-                            <td>
-                                {escape(
-                                    str(
-                                        row["material_name"]
-                                    )
-                                )}
-                            </td>
-
-                            <td>
-                                {escape(
-                                    str(
-                                        row["unit_name"]
-                                        or ""
-                                    )
-                                )}
-                            </td>
-
-                            <td>
-                                {float(
-                                    row[
-                                        "required_quantity"
-                                    ]
-                                ):.4f}
-                            </td>
-
-                            <td>
-                                {float(
-                                    row[
-                                        "stock_quantity"
-                                    ]
-                                ):.4f}
-                            </td>
-
-                            <td>
-                                {float(
-                                    row["shortage"]
-                                ):.4f}
-                            </td>
-
-                            <td>
-                                {float(
-                                    row[
-                                        "material_cost"
-                                    ]
-                                ):.2f}
-                            </td>
-
-                        </tr>
+    # ------------------------------------------------------------
+    # ДОБАВИТЬ ОБЪЕКТ
+    # ------------------------------------------------------------
+    elif sub == "Добавить объект":
+        clients = get_clients()
+        client_map = {str(row["name"]): int(row["id"]) for _, row in clients.iterrows()} if not clients.empty else {}
+        st.subheader("Создать объект")
+        with st.form("create_object"):
+            client_name = st.selectbox("Заказчик", list(client_map.keys()) if client_map else [])
+            object_name = st.text_input("Название объекта")
+            address = st.text_input("Адрес")
+            phone = st.text_input("Телефон")
+            contact_person = st.text_input("Контактное лицо")
+            notes = st.text_area("Примечания")
+            c1, c2 = st.columns(2)
+            with c1:
+                distance = st.number_input("Расстояние доставки (км)", min_value=0.0, value=0.0)
+                delivery_cost = st.number_input("Стоимость доставки", min_value=0.0, value=0.0)
+                contract_date = st.date_input("Дата договора", value=None)
+                production_start = st.date_input("Начало производства", value=None)
+                production_end = st.date_input("Окончание производства", value=None)
+            with c2:
+                installation_date = st.date_input("Дата монтажа", value=None)
+                installation_end = st.date_input("Окончание монтажа", value=None)
+            submit = st.form_submit_button("Создать объект")
+            if submit:
+                if not client_name or not object_name.strip():
+                    st.warning("Необходимо указать заказчика и название объекта.")
+                else:
+                    run_query(
                         """
-
-                    material_html = f"""
-                    <!DOCTYPE html>
-
-                    <html>
-
-                    <head>
-
-                        <meta charset="utf-8">
-
-                        <title>
-                            Потребность в материалах
-                        </title>
-
-                        <style>
-
-                            body {{
-                                font-family: Arial;
-                                margin: 35px;
-                            }}
-
-                            table {{
-                                width: 100%;
-                                border-collapse: collapse;
-                            }}
-
-                            th, td {{
-                                border: 1px solid #999;
-                                padding: 8px;
-                            }}
-
-                            th {{
-                                background-color: #eeeeee;
-                            }}
-
-                        </style>
-
-                    </head>
-
-                    <body>
-
-                        <h2>
-                            Потребность в материалах
-                        </h2>
-
-                        <p>
-                            <b>Клиент:</b>
-                            {escape(
-                                str(
-                                    object_row[
-                                        "client_name"
-                                    ]
-                                    or ""
-                                )
-                            )}
-                        </p>
-
-                        <p>
-                            <b>Объект:</b>
-                            {escape(
-                                str(
-                                    object_row[
-                                        "object_name"
-                                    ]
-                                    or ""
-                                )
-                            )}
-                        </p>
-
-                        <p>
-                            <b>Адрес:</b>
-                            {escape(
-                                str(
-                                    object_row[
-                                        "address"
-                                    ]
-                                    or ""
-                                )
-                            )}
-                        </p>
-
-                        <table>
-
-                            <tr>
-
-                                <th>No.</th>
-                                <th>Материал</th>
-                                <th>Единица</th>
-                                <th>Требуется</th>
-                                <th>Остаток</th>
-                                <th>Недостаток</th>
-                                <th>Стоимость</th>
-
-                            </tr>
-
-                            {html_rows}
-
-                        </table>
-
-                        <h3>
-
-                            Total Стоимость материалов:
-                            {float(total_cost):.2f}
-
-                        </h3>
-
-                        <script>
-                            window.print();
-                        </script>
-
-                    </body>
-
-                    </html>
-                    """
-
-                    st.download_button(
-                        "Скачать потребность в материалах HTML",
-                        data=material_html,
-                        file_name=(
-                            f"material_requirements_"
-                            f"{object_id}.html"
-                        ),
-                        mime="text/html"
+                        INSERT INTO reklet.objects
+                        (client_id, object_name, address, phone, contact_person, notes,
+                         transport_distance_km, delivery_cost, contract_date,
+                         production_start_date, production_end_date, installation_date, installation_end_date)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        """,
+                        (client_map[client_name], object_name.strip(), address or None, phone or None,
+                         contact_person or None, notes or None, distance, delivery_cost,
+                         contract_date, production_start, production_end, installation_date, installation_end)
                     )
+                    st.success("Объект создан.")
+
+    # ------------------------------------------------------------
+    # КОРРЕКТИРОВКА ОБЪЕКТА
+    # ------------------------------------------------------------
+    elif sub == "Корректировка":
+        objects = get_objects()
+        if objects.empty:
+            st.info("Нет объектов для корректировки.")
+        else:
+            objects = objects.sort_values("id", ascending=False)
+            object_map = {f"{int(row['id'])} — {row['object_name']}": int(row['id']) for _, row in objects.iterrows()}
+            selected = st.selectbox("Отбор по объекту", list(object_map.keys()), key="object_correction_select")
+            object_id = object_map[selected]
+            row = objects[objects["id"] == object_id].iloc[0]
+            with st.form("edit_object_form"):
+                object_name = st.text_input("Название объекта", value=str(row.get("object_name", "") or ""))
+                address = st.text_input("Адрес", value=str(row.get("address", "") or ""))
+                save = st.form_submit_button("Сохранить изменения")
+                if save:
+                    if object_name.strip():
+                        run_query("UPDATE reklet.objects SET object_name=%s, address=%s WHERE id=%s", (object_name.strip(), address.strip() or None, object_id))
+                        st.success("Объект изменён.")
+                    else:
+                        st.warning("Название объекта не может быть пустым.")
+            st.warning("Удаление объекта безопасное: объект с изделиями удалить нельзя.")
+            confirm = st.checkbox("Я подтверждаю удаление выбранного объекта.", key="confirm_delete_object")
+            if st.button("Удалить объект", disabled=not confirm, key="delete_object_button"):
+                used = run_query("SELECT COUNT(*) AS cnt FROM reklet.object_items WHERE object_id=%s", (object_id,), fetch=True)
+                if int(used.iloc[0]["cnt"]) > 0:
+                    st.error("Удаление невозможно: в объекте есть изделия.")
+                else:
+                    run_query("DELETE FROM reklet.objects WHERE id=%s", (object_id,))
+                    st.success("Объект удалён.")
 
 
 # ============================================================
