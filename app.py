@@ -2845,19 +2845,34 @@ elif menu == "Склад материалов":
             )
             object_id = object_options[object_label]
 
-            required_ids = set()
-            required = run_query(
+            # Потребность материалов по выбранному объекту:
+            # сумма по всем изделиям объекта: количество изделия × норма материала × коэффициент отходов.
+            demand = run_query(
                 """
-                SELECT DISTINCT ptm.material_id
+                SELECT
+                    ptm.material_id,
+                    SUM(
+                        COALESCE(oi.quantity_needed, 0)
+                        * COALESCE(ptm.quantity_per_unit, 0)
+                        * COALESCE(ptm.waste_coefficient, 1)
+                    ) AS required_quantity
                 FROM reklet.object_items oi
                 JOIN reklet.product_template_materials ptm
                   ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
                 WHERE oi.object_id=%s
+                  AND COALESCE(oi.quantity_needed,0) > 0
+                  AND COALESCE(oi.qty_installed,0) < COALESCE(oi.quantity_needed,0)
+                GROUP BY ptm.material_id
                 """,
                 (object_id,),fetch=True
             )
-            if not required.empty:
-                required_ids = {safe_int(x) for x in required["material_id"].tolist()}
+            demand_map = {}
+            if not demand.empty:
+                demand_map = {
+                    safe_int(r["material_id"]): safe_float(r["required_quantity"])
+                    for _, r in demand.iterrows()
+                }
+            required_ids = set(demand_map.keys())
 
             material_scope = st.selectbox(
                 "Материалы для выбранного объекта",
@@ -2872,9 +2887,10 @@ elif menu == "Склад материалов":
                     st.info("Для выбранного объекта по спецификациям материалов потребности нет.")
             if not issue_materials.empty:
                 issue_df=issue_materials[["id","name","unit_name","stock_quantity"]].copy()
+                issue_df["required_quantity"] = issue_df["id"].map(demand_map).fillna(0.0)
                 issue_df.insert(0,"Выбрать",False)
                 issue_df["Выдать"]=0.0
-                issue_df.columns=["Выбрать","ID","Материал","Единица","На складе","Выдать"]
+                issue_df.columns=["Выбрать","ID","Материал","Единица","На складе","Потребность объекта","Выдать"]
                 with st.form(f"issue_materials_form_{object_id}",clear_on_submit=False):
                     edited_issue=st.data_editor(
                         issue_df,key=f"issue_materials_editor_{object_id}_{material_scope}",
@@ -2885,9 +2901,10 @@ elif menu == "Склад материалов":
                             "Материал":st.column_config.TextColumn("Материал",disabled=True),
                             "Единица":st.column_config.TextColumn("Единица",disabled=True),
                             "На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.4f"),
+                            "Потребность объекта":st.column_config.NumberColumn("Потребность объекта",disabled=True,format="%.4f"),
                             "Выдать":st.column_config.NumberColumn("Выдать",min_value=0.0,step=0.001,format="%.4f")
                         },
-                        disabled=["ID","Материал","Единица","На складе"]
+                        disabled=["ID","Материал","Единица","На складе","Потребность объекта"]
                     )
                     execute_issue=st.form_submit_button("Выполнить выдачу в производство",use_container_width=True)
                 if execute_issue:
