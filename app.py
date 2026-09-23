@@ -3651,19 +3651,81 @@ elif menu == "Зарплата":
     with b1:
         if st.button("Зарплата производства", key="payroll_production_btn", width="stretch"):
             st.session_state.payroll_section = "Производство"
+            st.rerun()
     with b2:
         if st.button("Зарплата транспортировки", key="payroll_transport_btn", width="stretch"):
             st.session_state.payroll_section = "Транспортировка"
+            st.rerun()
     with b3:
         if st.button("Зарплата монтажа", key="payroll_install_btn", width="stretch"):
             st.session_state.payroll_section = "Монтаж"
+            st.rerun()
     with b4:
         if st.button("Сводка по зарплате", key="payroll_summary_btn", width="stretch"):
             st.session_state.payroll_section = "Сводка"
+            st.rerun()
 
     st.markdown("---")
 
-    # Себестоимость материалов одного элемента.
+    # --------------------------------------------------------
+    # Двойной отбор: сначала заказчик, затем его объект.
+    # Никакой общей таблицы по всем объектам здесь нет.
+    # --------------------------------------------------------
+    customers = run_query(
+        """
+        SELECT DISTINCT c.id, c.name
+        FROM reklet.clients c
+        JOIN reklet.objects o ON o.client_id = c.id
+        JOIN reklet.object_items oi ON oi.object_id = o.id
+        ORDER BY c.name
+        """,
+        fetch=True
+    )
+
+    section_key = st.session_state.payroll_section
+
+    if customers.empty:
+        st.info("Нет объектов с изделиями для расчёта зарплаты.")
+        st.stop()
+
+    customer_options = [f"{int(row['id'])} — {row['name']}" for _, row in customers.iterrows()]
+    selected_customer = st.selectbox(
+        "Заказчик",
+        customer_options,
+        key=f"payroll_customer_filter_{section_key}"
+    )
+    selected_customer_id = int(selected_customer.split(" — ")[0])
+
+    objects_for_customer = run_query(
+        """
+        SELECT DISTINCT o.id, o.object_name
+        FROM reklet.objects o
+        JOIN reklet.object_items oi ON oi.object_id = o.id
+        WHERE o.client_id = %s
+        ORDER BY o.object_name
+        """,
+        (selected_customer_id,),
+        fetch=True
+    )
+
+    if objects_for_customer.empty:
+        st.info("У выбранного заказчика нет объектов с изделиями.")
+        st.stop()
+
+    object_options = [
+        f"{int(row['id'])} — {row['object_name']}"
+        for _, row in objects_for_customer.iterrows()
+    ]
+    selected_object = st.selectbox(
+        "Объект",
+        object_options,
+        key=f"payroll_object_filter_{section_key}_{selected_customer_id}"
+    )
+    selected_object_id = int(selected_object.split(" — ")[0])
+
+    st.markdown("---")
+
+    # Данные только выбранного объекта.
     payroll_items = run_query(
         """
         SELECT
@@ -3689,164 +3751,156 @@ elif menu == "Зарплата":
             ON ptm.product_template_id = pt.id
         LEFT JOIN reklet.materials m
             ON m.id = ptm.material_id
+        WHERE oi.object_id = %s
         GROUP BY
             oi.id, oi.object_id, o.object_name, c.name, oi.item_name,
             oi.quantity_needed, o.transport_distance_km, o.delivery_cost
-        ORDER BY o.object_name, oi.item_name
+        ORDER BY oi.id
         """,
+        (selected_object_id,),
         fetch=True
     )
 
     if payroll_items.empty:
-        st.info("Нет элементов для расчёта зарплаты.")
-    else:
-        # Отбор по объекту применяется ко всем четырём разделам зарплаты.
-        payroll_object_options = ["Все объекты"] + [
-            f"{int(row['object_id'])} — {row['object_name']}"
-            for _, row in payroll_items[["object_id", "object_name"]].drop_duplicates().iterrows()
-        ]
-        payroll_object_filter = st.selectbox(
-            "Отбор по объекту",
-            payroll_object_options,
-            key=f"payroll_object_filter_{st.session_state.payroll_section}"
+        st.info("В выбранном объекте нет изделий для расчёта зарплаты.")
+        st.stop()
+
+    numeric_cols = ["material_cost_per_unit", "distance_km", "quantity_needed"]
+    for col in numeric_cols:
+        payroll_items[col] = pd.to_numeric(
+            payroll_items[col], errors="coerce"
+        ).fillna(0.0)
+
+    if st.session_state.payroll_section == "Производство":
+        view = payroll_items.copy()
+        view["Себестоимость материалов"] = view["material_cost_per_unit"]
+        view["Количество"] = view["quantity_needed"]
+        view["Зарплата производства"] = (
+            view["material_cost_per_unit"] * view["quantity_needed"] * 1.50
         )
-        if payroll_object_filter != "Все объекты":
-            payroll_object_id = int(payroll_object_filter.split(" — ")[0])
-            payroll_items = payroll_items[payroll_items["object_id"] == payroll_object_id].copy()
+        view = view.rename(columns={
+            "object_name": "Объект",
+            "client_name": "Заказчик",
+            "item_name": "Изделие"
+        })
+        st.caption(
+            "Зарплата производства рассчитывается сразу на всё количество изделий, "
+            "указанное в объекте: себестоимость материалов × количество изделий × 1,50 (+50%)."
+        )
+        st.dataframe(
+            view[[
+                "Изделие", "Себестоимость материалов", "Количество",
+                "Зарплата производства"
+            ]],
+            width="stretch",
+            hide_index=True
+        )
 
-        if payroll_items.empty:
-            st.info("По выбранному объекту данных для расчёта зарплаты нет.")
-            st.stop()
+    elif st.session_state.payroll_section == "Монтаж":
+        view = payroll_items.copy()
+        view["Себестоимость материалов"] = view["material_cost_per_unit"]
+        view["Количество"] = view["quantity_needed"]
+        view["Зарплата монтажа"] = (
+            view["material_cost_per_unit"] * view["quantity_needed"] * 1.40
+        )
+        view = view.rename(columns={
+            "object_name": "Объект",
+            "client_name": "Заказчик",
+            "item_name": "Изделие"
+        })
+        st.caption(
+            "Зарплата монтажа рассчитывается сразу на всё количество изделий, "
+            "указанное в объекте: себестоимость материалов × количество изделий × 1,40 (+40%)."
+        )
+        st.dataframe(
+            view[[
+                "Изделие", "Себестоимость материалов", "Количество",
+                "Зарплата монтажа"
+            ]],
+            width="stretch",
+            hide_index=True
+        )
 
-        # PostgreSQL numeric/Decimal values and nullable quantities are normalized
-        # before arithmetic so Pandas never tries to multiply strings by numbers.
-        numeric_cols = [
-            "material_cost_per_unit",
-            "distance_km",
-            "quantity_needed"
-        ]
-        for col in numeric_cols:
-            if col in payroll_items.columns:
-                payroll_items[col] = pd.to_numeric(
-                    payroll_items[col], errors="coerce"
-                ).fillna(0.0)
+    elif st.session_state.payroll_section == "Транспортировка":
+        view = payroll_items.copy()
+        view["Себестоимость материалов"] = (
+            view["material_cost_per_unit"] * view["quantity_needed"]
+        )
+        view["Количество"] = view["quantity_needed"]
+        view["Зарплата 10%"] = view["Себестоимость материалов"] * 0.10
 
-        if st.session_state.payroll_section == "Производство":
-            view = payroll_items.copy()
-            view["Себестоимость материалов"] = view["material_cost_per_unit"]
-            view["Количество"] = view["quantity_needed"]
-            view["Зарплата производства"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.50
-            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
-            st.caption("Зарплата производства рассчитывается сразу на всё количество изделий, указанное в объекте: себестоимость материалов × количество изделий × 1,50 (+50%).")
-            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата производства"]], width="stretch", hide_index=True)
+        st.caption(
+            "Транспортировка = 10% от себестоимости материалов всех изделий объекта "
+            "+ расстояние до объекта × 2. Расстояние оплачивается только один раз на объект."
+        )
+        st.dataframe(
+            view[[
+                "item_name", "Себестоимость материалов", "Количество", "Зарплата 10%"
+            ]].rename(columns={"item_name": "Изделие"}),
+            width="stretch",
+            hide_index=True
+        )
 
-        elif st.session_state.payroll_section == "Монтаж":
-            view = payroll_items.copy()
-            view["Себестоимость материалов"] = view["material_cost_per_unit"]
-            view["Количество"] = view["quantity_needed"]
-            view["Зарплата монтажа"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.40
-            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
-            st.caption("Зарплата монтажа рассчитывается сразу на всё количество изделий, указанное в объекте: себестоимость материалов × количество изделий × 1,40 (+40%).")
-            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата монтажа"]], width="stretch", hide_index=True)
+        total_material_cost = float(view["Себестоимость материалов"].sum())
+        salary_10 = total_material_cost * 0.10
+        distance_km = float(payroll_items["distance_km"].iloc[0]) if not payroll_items.empty else 0.0
+        distance_salary = distance_km * 2
+        transport_total = salary_10 + distance_salary
 
-        elif st.session_state.payroll_section == "Транспортировка":
-            view = payroll_items.copy()
-            view["Себестоимость материалов"] = view["material_cost_per_unit"] * view["quantity_needed"]
-            view["Количество"] = view["quantity_needed"]
-            # 10% рассчитывается отдельно по каждому изделию, но стоимость
-            # расстояния до объекта начисляется один раз на весь объект.
-            view["Зарплата 10%"] = view["Себестоимость материалов"] * 0.10
-            view = view.rename(columns={
-                "object_name":"Объект",
-                "client_name":"Заказчик",
-                "item_name":"Изделие",
-                "distance_km":"Расстояние, км"
-            })
-            st.caption(
-                "Транспортировка = 10% от общей себестоимости материалов всех изделий объекта "
-                "+ расстояние до объекта × 2. Расстояние оплачивается только один раз на объект, "
-                "независимо от количества изделий."
-            )
-            st.dataframe(
-                view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата 10%"]],
-                width="stretch",
-                hide_index=True
-            )
+        summary = pd.DataFrame([{
+            "Себестоимость материалов всего": total_material_cost,
+            "Зарплата 10%": salary_10,
+            "Расстояние, км": distance_km,
+            "Расстояние × 2": distance_salary,
+            "Итого зарплата транспортировки": transport_total
+        }])
+        st.subheader("Итого по выбранному объекту")
+        st.dataframe(summary, width="stretch", hide_index=True)
 
-            transport_summary = (
-                payroll_items.assign(
-                    material_total=lambda x: x["material_cost_per_unit"] * x["quantity_needed"],
-                    salary_10=lambda x: x["material_cost_per_unit"] * x["quantity_needed"] * 0.10
-                )
-                .groupby(["object_id", "object_name", "client_name"], as_index=False)
-                .agg(
-                    **{
-                        "Себестоимость материалов": ("material_total", "sum"),
-                        "Зарплата 10%": ("salary_10", "sum"),
-                        "Расстояние, км": ("distance_km", "first")
-                    }
-                )
-            )
-            transport_summary["Расстояние × 2"] = transport_summary["Расстояние, км"] * 2
-            transport_summary["Итого зарплата транспортировки"] = (
-                transport_summary["Зарплата 10%"] + transport_summary["Расстояние × 2"]
-            )
-            transport_summary = transport_summary.rename(columns={
-                "object_name":"Объект",
-                "client_name":"Заказчик"
-            })
-            st.subheader("Итого по объектам")
-            st.dataframe(
-                transport_summary[[
-                    "Объект", "Заказчик", "Себестоимость материалов",
-                    "Зарплата 10%", "Расстояние, км", "Расстояние × 2",
-                    "Итого зарплата транспортировки"
-                ]],
-                width="stretch",
-                hide_index=True
-            )
+    else:
+        view = payroll_items.copy()
+        view["Производство"] = (
+            view["material_cost_per_unit"] * view["quantity_needed"] * 1.50
+        )
+        view["Монтаж"] = (
+            view["material_cost_per_unit"] * view["quantity_needed"] * 1.40
+        )
+        view["Доставка 10%"] = (
+            view["material_cost_per_unit"] * view["quantity_needed"] * 0.10
+        )
 
-        else:
-            view = payroll_items.copy()
-            view["Производство"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.50
-            view["Монтаж"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.40
-            view["Доставка 10%"] = view["material_cost_per_unit"] * view["quantity_needed"] * 0.10
-            view["Итого без расстояния"] = view["Производство"] + view["Монтаж"] + view["Доставка 10%"]
-            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
-            st.dataframe(
-                view[["Объект", "Заказчик", "Изделие", "Производство", "Монтаж", "Доставка 10%", "Итого без расстояния"]],
-                width="stretch",
-                hide_index=True
-            )
+        st.dataframe(
+            view[["item_name", "Производство", "Монтаж", "Доставка 10%"]].rename(
+                columns={"item_name": "Изделие"}
+            ),
+            width="stretch",
+            hide_index=True
+        )
 
-            summary = (
-                payroll_items.assign(
-                    Производство=lambda x: x["material_cost_per_unit"] * x["quantity_needed"] * 1.50,
-                    Монтаж=lambda x: x["material_cost_per_unit"] * x["quantity_needed"] * 1.40,
-                    **{
-                        "Доставка 10%": lambda x: x["material_cost_per_unit"] * x["quantity_needed"] * 0.10
-                    }
-                )
-                .groupby(["object_id", "object_name", "client_name"], as_index=False)
-                .agg(
-                    Производство=("Производство", "sum"),
-                    Монтаж=("Монтаж", "sum"),
-                    **{
-                        "Доставка 10%": ("Доставка 10%", "sum"),
-                        "Расстояние, км": ("distance_km", "first")
-                    }
-                )
-            )
-            summary["Расстояние × 2"] = summary["Расстояние, км"] * 2
-            summary["Доставка"] = summary["Доставка 10%"] + summary["Расстояние × 2"]
-            summary["Итого"] = summary["Производство"] + summary["Монтаж"] + summary["Доставка"]
-            summary = summary.rename(columns={"object_name":"Объект", "client_name":"Заказчик"})
-            st.subheader("Сводка по объектам")
-            st.dataframe(
-                summary[["Объект", "Заказчик", "Производство", "Монтаж", "Доставка 10%", "Расстояние, км", "Расстояние × 2", "Доставка", "Итого"]],
-                width="stretch",
-                hide_index=True
-            )
+        total_production = float(view["Производство"].sum())
+        total_installation = float(view["Монтаж"].sum())
+        total_delivery_10 = float(view["Доставка 10%"].sum())
+        distance_km = float(payroll_items["distance_km"].iloc[0]) if not payroll_items.empty else 0.0
+        distance_salary = distance_km * 2
+        total_delivery = total_delivery_10 + distance_salary
+        total_salary = total_production + total_installation + total_delivery
+
+        summary = pd.DataFrame([{
+            "Производство": total_production,
+            "Монтаж": total_installation,
+            "Доставка 10%": total_delivery_10,
+            "Расстояние, км": distance_km,
+            "Расстояние × 2": distance_salary,
+            "Доставка": total_delivery,
+            "Итого": total_salary
+        }])
+        st.subheader("Итого по выбранному объекту")
+        st.dataframe(summary, width="stretch", hide_index=True)
+
+    st.caption(
+        "Количество берётся из object_items.quantity_needed — это плановая зарплата "
+        "за всё количество изделий объекта, независимо от фактически выполненных работ."
+    )
 
 
 # ============================================================
@@ -4235,142 +4289,6 @@ elif menu == "Отчёты":
             st.dataframe(need.rename(columns={"object_name":"Объект","client_name":"Заказчик","item_name":"Изделие","material":"Материал","required_quantity":"Требуется","stock_quantity":"На складе"}), width="stretch", hide_index=True)
 
 
-
-
-# ============================================================
-# PAYROLL
-# ============================================================
-
-elif menu == "Зарплата":
-
-    st.header("Зарплата")
-
-    if "payroll_section" not in st.session_state:
-        st.session_state.payroll_section = "Производство"
-
-    b1, b2, b3, b4 = st.columns(4)
-    with b1:
-        if st.button("Зарплата производства", key="payroll_production_btn", width="stretch"):
-            st.session_state.payroll_section = "Производство"
-    with b2:
-        if st.button("Зарплата транспортировки", key="payroll_transport_btn", width="stretch"):
-            st.session_state.payroll_section = "Транспортировка"
-    with b3:
-        if st.button("Зарплата монтажа", key="payroll_install_btn", width="stretch"):
-            st.session_state.payroll_section = "Монтаж"
-    with b4:
-        if st.button("Сводка по зарплате", key="payroll_summary_btn", width="stretch"):
-            st.session_state.payroll_section = "Сводка"
-
-    st.markdown("---")
-
-    # Себестоимость материалов одного элемента.
-    payroll_items = run_query(
-        """
-        SELECT
-            oi.id AS object_item_id,
-            oi.object_id,
-            o.object_name,
-            COALESCE(c.name, '') AS client_name,
-            oi.item_name,
-            COALESCE(oi.quantity_needed, 0) AS quantity_needed,
-            COALESCE(o.transport_distance_km, 0) AS distance_km,
-            COALESCE(o.delivery_cost, 0) AS stored_delivery_cost,
-            COALESCE(SUM(
-                ptm.quantity_per_unit *
-                COALESCE(ptm.waste_coefficient, m.default_waste_coefficient, 1) *
-                COALESCE(m.cost_per_unit, 0)
-            ), 0) AS material_cost_per_unit
-        FROM reklet.object_items oi
-        JOIN reklet.objects o ON o.id = oi.object_id
-        LEFT JOIN reklet.clients c ON c.id = o.client_id
-        LEFT JOIN reklet.product_templates pt
-            ON pt.id = COALESCE(oi.product_template_id, oi.template_id)
-        LEFT JOIN reklet.product_template_materials ptm
-            ON ptm.product_template_id = pt.id
-        LEFT JOIN reklet.materials m
-            ON m.id = ptm.material_id
-        GROUP BY
-            oi.id, oi.object_id, o.object_name, c.name, oi.item_name,
-            oi.quantity_needed, o.transport_distance_km, o.delivery_cost
-        ORDER BY o.object_name, oi.item_name
-        """,
-        fetch=True
-    )
-
-    if payroll_items.empty:
-        st.info("Нет элементов для расчёта зарплаты.")
-    else:
-        # Отбор по объекту применяется ко всем четырём разделам зарплаты.
-        payroll_object_options = ["Все объекты"] + [
-            f"{int(row['object_id'])} — {row['object_name']}"
-            for _, row in payroll_items[["object_id", "object_name"]].drop_duplicates().iterrows()
-        ]
-        payroll_object_filter = st.selectbox(
-            "Отбор по объекту",
-            payroll_object_options,
-            key=f"payroll_object_filter_{st.session_state.payroll_section}"
-        )
-        if payroll_object_filter != "Все объекты":
-            payroll_object_id = int(payroll_object_filter.split(" — ")[0])
-            payroll_items = payroll_items[payroll_items["object_id"] == payroll_object_id].copy()
-
-        if payroll_items.empty:
-            st.info("По выбранному объекту данных для расчёта зарплаты нет.")
-            st.stop()
-
-        # PostgreSQL numeric/Decimal values and nullable quantities are normalized
-        # before arithmetic so Pandas never tries to multiply strings by numbers.
-        numeric_cols = [
-            "material_cost_per_unit",
-            "distance_km",
-            "quantity_needed"
-        ]
-        for col in numeric_cols:
-            if col in payroll_items.columns:
-                payroll_items[col] = pd.to_numeric(
-                    payroll_items[col], errors="coerce"
-                ).fillna(0.0)
-
-        if st.session_state.payroll_section == "Производство":
-            view = payroll_items.copy()
-            view["Себестоимость материалов"] = view["material_cost_per_unit"]
-            view["Количество"] = view["quantity_needed"]
-            view["Зарплата производства"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.50
-            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
-            st.caption("Зарплата производства рассчитывается сразу на всё количество изделий, указанное в объекте: себестоимость материалов × количество изделий × 1,50 (+50%).")
-            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата производства"]], width="stretch", hide_index=True)
-
-        elif st.session_state.payroll_section == "Монтаж":
-            view = payroll_items.copy()
-            view["Себестоимость материалов"] = view["material_cost_per_unit"]
-            view["Количество"] = view["quantity_needed"]
-            view["Зарплата монтажа"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.40
-            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
-            st.caption("Зарплата монтажа рассчитывается сразу на всё количество изделий, указанное в объекте: себестоимость материалов × количество изделий × 1,40 (+40%).")
-            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата монтажа"]], width="stretch", hide_index=True)
-
-        elif st.session_state.payroll_section == "Транспортировка":
-            view = payroll_items.copy()
-            view["Себестоимость материалов"] = view["material_cost_per_unit"] * view["quantity_needed"]
-            view["Количество"] = view["quantity_needed"]
-            view["Зарплата транспортировки"] = view["Себестоимость материалов"] * 0.10 + view["distance_km"] * 2
-            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие", "distance_km":"Расстояние, км"})
-            st.caption("Зарплата транспортировки рассчитывается сразу на всё количество изделий, указанное в объекте: 10% от себестоимости материалов этого количества + расстояние × 2 условные единицы.")
-            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Расстояние, км", "Зарплата транспортировки"]], width="stretch", hide_index=True)
-
-        else:
-            view = payroll_items.copy()
-            view["Производство"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.50
-            view["Монтаж"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.40
-            view["Доставка"] = (view["material_cost_per_unit"] * view["quantity_needed"] * 0.10) + view["distance_km"] * 2
-            view["Итого"] = view["Производство"] + view["Монтаж"] + view["Доставка"]
-            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
-            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Производство", "Монтаж", "Доставка", "Итого"]], width="stretch", hide_index=True)
-
-            summary = view.groupby(["Объект", "Заказчик"], as_index=False)[["Производство", "Монтаж", "Доставка", "Итого"]].sum()
-            st.subheader("Сводка по объектам")
-            st.dataframe(summary, width="stretch", hide_index=True)
 
 
 # ============================================================
