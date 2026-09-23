@@ -1276,7 +1276,7 @@ elif menu == "Объекты":
 
     elif sub == "Состав объекта":
 
-        # Для состава объекта нужен только один отбор — по объекту.
+        # В составе объекта используется только один отбор — по объекту.
         # Новые объекты находятся сверху.
         all_objects = get_objects()
 
@@ -1293,7 +1293,9 @@ elif menu == "Объекты":
                 ["_sort_date", "id"], ascending=[False, False], na_position="last"
             )
         else:
-            objects_for_filter = objects_for_filter.sort_values("id", ascending=False)
+            objects_for_filter = objects_for_filter.sort_values(
+                "id", ascending=False
+            )
 
         object_options = []
         object_map = {}
@@ -1321,7 +1323,7 @@ elif menu == "Объекты":
 
         st.subheader(f"{object_name} / {object_client_name}")
 
-        # Сначала показываем изделия, уже созданные в объекте.
+        # Уже добавленные изделия объекта.
         items = get_object_items(object_id)
         if items.empty:
             st.info("Для этого объекта ещё не созданы изделия.")
@@ -1347,7 +1349,10 @@ elif menu == "Объекты":
                     qty_arrived = safe_int(row["qty_arrived"])
                     qty_installing = safe_int(row["qty_installing"])
                     qty_installed = safe_int(row["qty_installed"])
-                    total = qty_new + qty_production + qty_ready + qty_shipped + qty_arrived + qty_installing + qty_installed
+                    total = (
+                        qty_new + qty_production + qty_ready + qty_shipped +
+                        qty_arrived + qty_installing + qty_installed
+                    )
 
                     run_query(
                         """
@@ -1357,23 +1362,25 @@ elif menu == "Объекты":
                             qty_shipped=%s, qty_arrived=%s, qty_installing=%s, qty_installed=%s
                         WHERE id=%s
                         """,
-                        (row["item_name"], total, total, qty_new, qty_production, qty_ready,
-                         qty_shipped, qty_arrived, qty_installing, qty_installed, safe_int(row["id"]))
+                        (
+                            row["item_name"], total, total, qty_new, qty_production,
+                            qty_ready, qty_shipped, qty_arrived, qty_installing,
+                            qty_installed, safe_int(row["id"])
+                        )
                     )
 
                 st.success("Сохранено.")
                 st.rerun()
 
-        # Для нового объекта эта таблица используется для первоначального
-        # заполнения. Дополнительного отбора по заказчику здесь нет:
-        # список изделий определяется заказчиком выбранного объекта.
         st.markdown("---")
-        st.subheader("Заполнение изделиями")
+        st.subheader("Добавить изделия в объект")
 
-        templates = get_templates()
+        # Изделия подбираются автоматически по заказчику выбранного объекта.
+        # Никакого отдельного отбора по заказчику здесь нет.
         if not object_client_name:
             st.warning("У объекта не указан заказчик — нельзя определить список изделий.")
         else:
+            templates = get_templates()
             templates = templates[
                 templates["client_name"].fillna("").astype(str).str.strip().eq(object_client_name)
             ].copy()
@@ -1384,25 +1391,38 @@ elif menu == "Объекты":
                 add_df = templates[["id", "name", "client_name", "category"]].copy()
                 add_df.insert(0, "Выбрать", False)
                 add_df["Количество"] = 0
-                add_df.columns = ["Выбрать", "ID", "Изделие", "Заказчик", "Категория", "Количество"]
+                add_df.columns = [
+                    "Выбрать", "ID", "Изделие", "Заказчик", "Категория", "Количество"
+                ]
 
-                edited_add = st.data_editor(
-                    add_df,
-                    key=f"object_add_items_editor_{object_id}",
-                    width="stretch",
-                    hide_index=True,
-                    column_config={
-                        "Выбрать": st.column_config.CheckboxColumn("Выбрать"),
-                        "ID": st.column_config.NumberColumn("ID", disabled=True),
-                        "Изделие": st.column_config.TextColumn("Изделие", disabled=True),
-                        "Заказчик": st.column_config.TextColumn("Заказчик", disabled=True),
-                        "Категория": st.column_config.TextColumn("Категория", disabled=True),
-                        "Количество": st.column_config.NumberColumn("Количество", min_value=0, step=1, format="%d"),
-                    },
-                    disabled=["ID", "Изделие", "Заказчик", "Категория"],
-                )
+                # Ключевой момент: таблица находится внутри form.
+                # Поэтому установка галочки/ввод количества НЕ вызывает rerun,
+                # не сбрасывает выбранный объект и не возвращает список объектов.
+                with st.form(f"object_add_items_form_{object_id}"):
+                    edited_add = st.data_editor(
+                        add_df,
+                        key=f"object_add_items_editor_{object_id}",
+                        width="stretch",
+                        hide_index=True,
+                        column_config={
+                            "Выбрать": st.column_config.CheckboxColumn("Выбрать"),
+                            "ID": st.column_config.NumberColumn("ID", disabled=True),
+                            "Изделие": st.column_config.TextColumn("Изделие", disabled=True),
+                            "Заказчик": st.column_config.TextColumn("Заказчик", disabled=True),
+                            "Категория": st.column_config.TextColumn("Категория", disabled=True),
+                            "Количество": st.column_config.NumberColumn(
+                                "Количество", min_value=0, step=1, format="%d"
+                            ),
+                        },
+                        disabled=["ID", "Изделие", "Заказчик", "Категория"],
+                    )
 
-                if st.button("Добавить выбранные изделия", key=f"execute_add_items_{object_id}", use_container_width=True):
+                    execute_add = st.form_submit_button(
+                        "Добавить выбранные изделия",
+                        use_container_width=True
+                    )
+
+                if execute_add:
                     selected_rows = edited_add[
                         edited_add["Выбрать"].fillna(False)
                         & (edited_add["Количество"].fillna(0).astype(float) > 0)
@@ -1431,7 +1451,8 @@ elif menu == "Объекты":
                             statements.append((
                                 """
                                 INSERT INTO reklet.object_items
-                                (object_id, product_template_id, template_id, quantity_needed, item_name, quantity, qty_new, status)
+                                (object_id, product_template_id, template_id,
+                                 quantity_needed, item_name, quantity, qty_new, status)
                                 SELECT %s,%s,%s,%s,%s,%s,%s,'New'
                                 WHERE NOT EXISTS (
                                     SELECT 1 FROM reklet.object_items
@@ -1439,8 +1460,11 @@ elif menu == "Объекты":
                                       AND (product_template_id=%s OR template_id=%s)
                                 )
                                 """,
-                                (object_id, template_id, template_id, qty, str(row["Изделие"]), qty, qty,
-                                 object_id, template_id, template_id)
+                                (
+                                    object_id, template_id, template_id, qty,
+                                    str(row["Изделие"]), qty, qty,
+                                    object_id, template_id, template_id
+                                )
                             ))
 
                         run_transaction(statements)
@@ -1492,11 +1516,6 @@ elif menu == "Объекты":
             file_name=f"specification_{object_id}.html",
             mime="text/html"
         )
-
-
-    # ========================================================
-    # MATERIAL REQUIREMENTS
-    # ========================================================
 
     else:
 
