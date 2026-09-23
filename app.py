@@ -1511,12 +1511,12 @@ elif menu == "Объекты":
                                         production_status=CASE
                                             WHEN %s >= quantity_needed THEN 'completed'
                                             WHEN %s > 0 THEN 'in_progress'
-                                            ELSE 'New'
+                                            ELSE 'not_started'
                                         END,
                                         installation_status=CASE
                                             WHEN %s >= quantity_needed THEN 'completed'
                                             WHEN %s > 0 THEN 'in_progress'
-                                            ELSE 'New'
+                                            ELSE 'not_started'
                                         END,
                                         production_progress_pct=CASE WHEN %s>0 THEN LEAST(100,ROUND(%s::numeric/%s*100)) ELSE 0 END,
                                         installation_progress_pct=CASE WHEN %s>0 THEN LEAST(100,ROUND(%s::numeric/%s*100)) ELSE 0 END
