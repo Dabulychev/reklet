@@ -972,6 +972,7 @@ elif menu == "Объекты":
     sub = render_button_nav(
         [
             "Список объектов",
+            "Добавить изделия на объект",
             "Состав объекта",
             "Потребность в материалах",
             "Добавить объект",
@@ -979,7 +980,7 @@ elif menu == "Объекты":
         ],
         "objects_navigation",
         "objects_nav",
-        columns_per_row=5
+        columns_per_row=6
     )
 
     st.markdown("---")
@@ -1276,7 +1277,83 @@ elif menu == "Объекты":
 
     elif sub == "Состав объекта":
 
-        # В составе объекта используется только один отбор — по объекту.
+        # СПЕЦИФИКАЦИЯ ОБЪЕКТА: сначала заказчик, затем объект.
+        # Здесь только просмотр состава объекта — без добавления изделий.
+        clients = get_clients()
+        objects = get_objects()
+
+        if clients.empty:
+            st.info("Заказчики отсутствуют.")
+            st.stop()
+
+        client_map = {
+            f"{int(row['id'])} — {str(row['name'] or '').strip()}": int(row['id'])
+            for _, row in clients.iterrows()
+        }
+
+        selected_client_label = st.selectbox(
+            "Отбор по заказчику",
+            list(client_map.keys()),
+            key="object_spec_client_filter"
+        )
+        selected_client_id = client_map[selected_client_label]
+
+        client_objects = objects[objects["client_id"].fillna(-1).astype(int).eq(selected_client_id)].copy()
+        client_objects = client_objects.sort_values("id", ascending=False)
+
+        if client_objects.empty:
+            st.info("У выбранного заказчика ещё нет объектов.")
+            st.stop()
+
+        object_map = {}
+        object_options = []
+        for _, row in client_objects.iterrows():
+            oid = int(row["id"])
+            object_name = str(row.get("object_name", "") or "").strip()
+            address = str(row.get("address", "") or "").strip()
+            label = f"{oid} — {object_name}"
+            if address:
+                label += f" — {address}"
+            object_options.append(label)
+            object_map[label] = oid
+
+        selected_object_label = st.selectbox(
+            "Отбор по объекту",
+            object_options,
+            key="object_spec_object_filter"
+        )
+        object_id = object_map[selected_object_label]
+
+        selected_object = client_objects[client_objects["id"].eq(object_id)].iloc[0]
+        object_name = str(selected_object.get("object_name", "") or "").strip()
+        client_name = str(selected_object.get("client_name", "") or "").strip()
+
+        st.subheader(f"Состав объекта: {object_name}")
+        st.caption(f"Заказчик: {client_name}")
+
+        items = get_object_items(object_id)
+        if items.empty:
+            st.info("Для этого объекта ещё не созданы изделия.")
+        else:
+            display = items[[
+                "id", "item_name", "quantity", "qty_new", "qty_production",
+                "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"
+            ]].copy()
+            display.columns = [
+                "ID", "Изделие", "Количество", "Новые", "Производство",
+                "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"
+            ]
+            data_editor_ru(
+                display,
+                key=f"object_specification_{object_id}",
+                width="stretch"
+            )
+
+    elif sub == "Добавить изделия на объект":
+
+        # Добавление изделий на объект: выбор объекта и многострочное заполнение.
+        # В составе объекта теперь только просмотр спецификации.
+        # Новые объекты находятся сверху.
         # Новые объекты находятся сверху.
         all_objects = get_objects()
 
