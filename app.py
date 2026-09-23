@@ -761,16 +761,19 @@ def get_object_items(object_id):
 
 
 # ============================================================
-# SIMPLE RECTANGULAR NAVIGATION / BUTTON STYLE
+# SIMPLE RECTANGULAR NAVIGATION
 # ============================================================
+# Navigation uses real Streamlit buttons, not radio widgets.
+# Therefore there are no radio circles/dots and no radio selection
+# animation.  All navigation controls are plain rectangular buttons.
 st.markdown("""
 <style>
-/* All Streamlit buttons: simple rectangular, text only, no pill/circle styling. */
 .stButton > button {
     border-radius: 0 !important;
     box-shadow: none !important;
     transition: none !important;
     animation: none !important;
+    transform: none !important;
     min-height: 38px !important;
     padding: 0.35rem 0.75rem !important;
     font-weight: 400 !important;
@@ -778,41 +781,47 @@ st.markdown("""
 .stButton > button:hover,
 .stButton > button:focus,
 .stButton > button:active {
-    box-shadow: none !important;
-    transition: none !important;
-    animation: none !important;
-}
-/* Horizontal radio navigation is rendered as rectangular text buttons. */
-[data-testid="stRadio"] > div[role="radiogroup"] {
-    gap: 0 !important;
-    flex-wrap: wrap !important;
-}
-[data-testid="stRadio"] > div[role="radiogroup"] > label {
-    border: 1px solid #bdbdbd !important;
     border-radius: 0 !important;
-    padding: 0.35rem 0.75rem !important;
-    margin: 0 -1px 0 0 !important;
-    background: white !important;
+    box-shadow: none !important;
     transition: none !important;
     animation: none !important;
-}
-[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
-    display: none !important;
-}
-[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) {
-    background: #eeeeee !important;
-    color: #111 !important;
-    box-shadow: none !important;
+    transform: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
+
+def render_button_nav(options, state_key, key_prefix, columns_per_row=None):
+    """Render a plain rectangular text-only navigation bar."""
+    if state_key not in st.session_state:
+        st.session_state[state_key] = options[0]
+
+    if columns_per_row is None:
+        columns_per_row = len(options)
+
+    selected = st.session_state[state_key]
+
+    for start in range(0, len(options), columns_per_row):
+        row = options[start:start + columns_per_row]
+        cols = st.columns(len(row), gap="small")
+        for col, option in zip(cols, row):
+            with col:
+                if st.button(
+                    option,
+                    key=f"{key_prefix}_{start}_{option}",
+                    use_container_width=True
+                ):
+                    st.session_state[state_key] = option
+                    st.rerun()
+
+    return st.session_state[state_key]
+
+
 # ============================================================
-# NAVIGATION
+# MAIN NAVIGATION
 # ============================================================
 
 menu_options = [
-
     "Клиенты",
     "Объекты",
     "Изделия",
@@ -824,17 +833,14 @@ menu_options = [
     "Монтаж",
     "Зарплата",
     "Отчёты"
-
 ]
 
-
-menu = st.radio(
-    "Раздел",
+menu = render_button_nav(
     menu_options,
-    horizontal=True,
-    label_visibility="collapsed"
+    "main_menu",
+    "main_nav",
+    columns_per_row=11
 )
-
 
 st.markdown("---")
 
@@ -847,11 +853,11 @@ if menu == "Клиенты":
 
     st.header("Клиенты")
 
-    client_sub = st.radio(
-        "Клиенты",
+    client_sub = render_button_nav(
         ["Клиенты", "Добавить клиента", "Корректировка"],
-        horizontal=True,
-        key="clients_navigation"
+        "clients_navigation",
+        "clients_nav",
+        columns_per_row=3
     )
 
     clients = get_clients()
@@ -963,8 +969,7 @@ elif menu == "Объекты":
 
     st.header("Объекты")
 
-    sub = st.radio(
-        "Объекты",
+    sub = render_button_nav(
         [
             "Список объектов",
             "Состав объекта",
@@ -972,8 +977,9 @@ elif menu == "Объекты":
             "Добавить объект",
             "Корректировка"
         ],
-        horizontal=True,
-        key="objects_navigation"
+        "objects_navigation",
+        "objects_nav",
+        columns_per_row=5
     )
 
     st.markdown("---")
@@ -2087,11 +2093,11 @@ elif menu == "Изделия":
 
     st.header("Изделия")
 
-    product_sub = st.radio(
-        "Изделия",
+    product_sub = render_button_nav(
         ["Перечень изделий", "Добавить изделие", "Спецификация изделия", "Корректировка изделия"],
-        horizontal=True,
-        key="products_navigation"
+        "products_navigation",
+        "products_nav",
+        columns_per_row=4
     )
 
     templates_all = get_templates()
@@ -2767,16 +2773,16 @@ elif menu == "Поставщики":
 
     st.header("Поставщики")
 
-    supplier_sub = st.radio(
-        "Поставщики",
+    supplier_sub = render_button_nav(
         [
             "Перечень поставщиков",
             "Создать поставщика",
             "Материалы поставщика",
             "Коррекция удаление Поставщиков"
         ],
-        horizontal=True,
-        key="suppliers_navigation"
+        "suppliers_navigation",
+        "suppliers_nav",
+        columns_per_row=4
     )
 
     suppliers = get_suppliers()
