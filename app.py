@@ -1307,7 +1307,7 @@ elif menu == "Объекты":
                 filtered_objects["client_name"].fillna("").astype(str).str.strip().eq(client_filter)
             ].copy()
 
-        object_filter_options = ["Все объекты"] + (
+        object_names = (
             [
                 str(x)
                 for x in filtered_objects["object_name"]
@@ -1321,46 +1321,37 @@ elif menu == "Объекты":
             if not filtered_objects.empty else []
         )
 
+        # В этом режиме второй список одновременно является отбором
+        # и выбором объекта для работы. Отдельного третьего списка
+        # "Объект" здесь быть не должно.
+        object_filter_options = ["Выберите объект"] + object_names
+
         object_filter = st.selectbox(
             "Отбор по объекту",
             object_filter_options,
             key="object_content_filter"
         )
 
-        if object_filter != "Все объекты":
-            filtered_objects = filtered_objects[
-                filtered_objects["object_name"].eq(object_filter)
+        if object_filter == "Выберите объект":
+            st.info("Выберите объект для работы с его изделиями.")
+            objects = filtered_objects.iloc[0:0].copy()
+        else:
+            objects = filtered_objects[
+                filtered_objects["object_name"].fillna("").astype(str).str.strip().eq(object_filter)
             ].copy()
-
-        objects = filtered_objects
 
         if objects.empty:
 
-            st.info(
-                "Нет объектов."
-            )
+            if object_filter != "Выберите объект":
+                st.info("Нет объектов.")
 
         else:
 
-            object_map = {
-                f"{row['id']} — "
-                f"{row['object_name']} — "
-                f"{row['client_name']}":
-                    int(row["id"])
+            # После фильтра остается один объект, поэтому отдельный
+            # selectbox "Объект" больше не нужен.
+            object_id = int(objects.iloc[0]["id"])
 
-                for _, row in objects.iterrows()
-            }
-
-            selected = st.selectbox(
-                "Объект",
-                list(object_map.keys())
-            )
-
-            object_id = object_map[selected]
-
-            object_row = objects[
-                objects["id"] == object_id
-            ].iloc[0]
+            object_row = objects.iloc[0]
 
             st.subheader(
                 f"{object_row['object_name']} / "
