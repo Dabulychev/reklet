@@ -2874,6 +2874,28 @@ elif menu == "Склад материалов":
                 }
             required_ids = set(demand_map.keys())
 
+            # Сколько материала уже выдано в производство именно этому объекту.
+            issued = run_query(
+                """
+                SELECT
+                    material_id,
+                    COALESCE(SUM(quantity),0) AS issued_quantity
+                FROM reklet.material_transactions
+                WHERE object_id=%s
+                  AND operation_type='production_transfer'
+                  AND transaction_type='OUT'
+                GROUP BY material_id
+                """,
+                (object_id,),
+                fetch=True
+            )
+            issued_map = {}
+            if not issued.empty:
+                issued_map = {
+                    safe_int(r["material_id"]): safe_float(r["issued_quantity"])
+                    for _, r in issued.iterrows()
+                }
+
             material_scope = st.selectbox(
                 "Материалы для выбранного объекта",
                 ["Все материалы","Только необходимые для объекта"],
@@ -2888,9 +2910,10 @@ elif menu == "Склад материалов":
             if not issue_materials.empty:
                 issue_df=issue_materials[["id","name","unit_name","stock_quantity"]].copy()
                 issue_df["required_quantity"] = issue_df["id"].map(demand_map).fillna(0.0)
+                issue_df["issued_quantity"] = issue_df["id"].map(issued_map).fillna(0.0)
                 issue_df.insert(0,"Выбрать",False)
                 issue_df["Выдать"]=0.0
-                issue_df.columns=["Выбрать","ID","Материал","Единица","На складе","Потребность объекта","Выдать"]
+                issue_df.columns=["Выбрать","ID","Материал","Единица","На складе","Потребность объекта","Выдано","Выдать"]
                 with st.form(f"issue_materials_form_{object_id}",clear_on_submit=False):
                     edited_issue=st.data_editor(
                         issue_df,key=f"issue_materials_editor_{object_id}_{material_scope}",
@@ -2902,9 +2925,10 @@ elif menu == "Склад материалов":
                             "Единица":st.column_config.TextColumn("Единица",disabled=True),
                             "На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.4f"),
                             "Потребность объекта":st.column_config.NumberColumn("Потребность объекта",disabled=True,format="%.4f"),
+                            "Выдано":st.column_config.NumberColumn("Выдано",disabled=True,format="%.4f"),
                             "Выдать":st.column_config.NumberColumn("Выдать",min_value=0.0,step=0.001,format="%.4f")
                         },
-                        disabled=["ID","Материал","Единица","На складе","Потребность объекта"]
+                        disabled=["ID","Материал","Единица","На складе","Потребность объекта","Выдано"]
                     )
                     execute_issue=st.form_submit_button("Выполнить выдачу в производство",use_container_width=True)
                 if execute_issue:
