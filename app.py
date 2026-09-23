@@ -1592,11 +1592,13 @@ elif menu == "Объекты":
 
                                 for cmd in change["commands"]:
                                     if cmd[0] == "order":
-                                        # Заказ уже создаёт количество на старте цепочки.
-                                        statements.append((
-                                            "INSERT INTO reklet.production_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'order',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                            (cmd[1], object_id, tid, tid)
-                                        ))
+                                        # Отдельная операция 'order' здесь НЕ записывается.
+                                        # В production_transactions у существующей БД operation_type
+                                        # допускает производственные операции ('start'/'completed'),
+                                        # а сам заказ уже отражён в object_items.quantity_needed.
+                                        # Начало производства будет записано add_stage_history()
+                                        # при переходе количества на следующий этап.
+                                        continue
                                     else:
                                         _, from_idx, to_idx, qty = cmd
                                         if qty > 0:
