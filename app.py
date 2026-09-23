@@ -1395,27 +1395,6 @@ elif menu == "Объекты":
                         "_qty_installed": qty_installed,
                     })
 
-                # Визуальная шапка этапов. Только HTML/CSS — без дополнительных
-                # запросов к БД и без тяжёлых компонентов.
-                st.markdown("""
-                <div class="stage-guide">
-                    <div class="stage-title">УПРАВЛЕНИЕ ДВИЖЕНИЕМ ИЗДЕЛИЯ</div>
-                    <div class="stage-groups">
-                        <div class="stage-spacer">Изделие</div>
-                        <div class="stage-group stage-order"><b>1. ЗАКАЗ</b><span>Сколько заказано</span></div>
-                        <div class="stage-group stage-production"><b>2. ПРОИЗВОДСТВО</b><span>Изготовление</span></div>
-                        <div class="stage-group stage-warehouse"><b>3. СКЛАД</b><span>Готовая продукция</span></div>
-                        <div class="stage-group stage-transport"><b>4. ТРАНСПОРТ</b><span>Отгрузка и доставка</span></div>
-                        <div class="stage-group stage-installation"><b>5. МОНТАЖ</b><span>Получение и установка</span></div>
-                    </div>
-                    <div class="stage-legend">
-                        <span class="legend-system"><b>СИСТЕМА</b> — синие значения рассчитываются автоматически</span>
-                        <span class="legend-action"><b>ДЕЙСТВИЕ</b> — зелёные значения вводятся вручную</span>
-                        <span class="legend-flow">Движение: Заказ → Производство → Склад → Транспорт → Монтаж</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
                 if not rows:
                     st.info("Для этого заказчика ещё не созданы изделия.")
                 else:
