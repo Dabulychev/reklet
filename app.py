@@ -1194,11 +1194,13 @@ elif menu == "Объекты":
                 st.dataframe(view, width="stretch", hide_index=True)
 
     # ------------------------------------------------------------
-    # УПРАВЛЕНИЕ ОБЪЕКТАМИ — EXCEL-ПОДОБНЫЙ ВВОД ЗАКАЗА
+    # УПРАВЛЕНИЕ ОБЪЕКТАМИ — EXCEL-ПОДОБНОЕ УПРАВЛЕНИЕ ВСЕЙ ЦЕПОЧКОЙ
     # ------------------------------------------------------------
     elif sub == "Управление объектами":
         clients = get_clients()
         objects = get_objects().sort_values("id", ascending=False).copy()
+        ensure_stage_movement_tables()
+
         if clients.empty or objects.empty:
             st.info("Для управления объектами нужны заказчики и объекты.")
         else:
@@ -1207,10 +1209,15 @@ elif menu == "Объекты":
                 for _, r in clients.iterrows()
             ]
             client_map = {label: int(label.split(" — ")[0]) for label in client_options}
-            selected_client_label = st.selectbox("Отбор по заказчику", client_options, key="management_client")
+            selected_client_label = st.selectbox(
+                "Отбор по заказчику", client_options, key="management_client"
+            )
             selected_client_id = client_map[selected_client_label]
 
-            client_objects = objects[objects["client_id"].fillna(-1).astype(int).eq(selected_client_id)].copy()
+            client_objects = objects[
+                objects["client_id"].fillna(-1).astype(int).eq(selected_client_id)
+            ].copy()
+
             if client_objects.empty:
                 st.info("У выбранного заказчика нет объектов.")
             else:
@@ -1218,14 +1225,20 @@ elif menu == "Объекты":
                     f"{int(r['id'])} — {str(r['object_name'] or '').strip()}"
                     for _, r in client_objects.iterrows()
                 ]
-                object_map = {label: int(label.split(" — ")[0]) for label in object_options}
-                selected_object_label = st.selectbox("Отбор по объекту", object_options, key="management_object")
+                object_map = {
+                    label: int(label.split(" — ")[0]) for label in object_options
+                }
+                selected_object_label = st.selectbox(
+                    "Отбор по объекту", object_options, key="management_object"
+                )
                 object_id = object_map[selected_object_label]
                 object_row = client_objects[client_objects["id"] == object_id].iloc[0]
 
                 templates = get_templates()
                 client_name = str(object_row.get("client_name", "") or "").strip()
-                templates = templates[templates["client_name"].fillna("").astype(str).str.strip().eq(client_name)].copy()
+                templates = templates[
+                    templates["client_name"].fillna("").astype(str).str.strip().eq(client_name)
+                ].copy()
 
                 current = get_object_items(object_id)
                 current_map = {}
@@ -1234,6 +1247,21 @@ elif menu == "Объекты":
                         tid = r.get("product_template_id") if pd.notna(r.get("product_template_id")) else r.get("template_id")
                         if pd.notna(tid):
                             current_map[int(tid)] = r
+
+                # Все количественные ячейки являются рабочими ячейками.
+                # Их смысл: текущее количество на соответствующем этапе.
+                # При увеличении любого этапа приложение автоматически проводит
+                # недостающие количества через все предыдущие этапы и пишет историю.
+                stage_columns = [
+                    ("Новые", "qty_new"),
+                    ("Производство", "qty_production"),
+                    ("Готовая продукция", "qty_ready"),
+                    ("Отгружено", "qty_shipped"),
+                    ("Прибыло", "qty_arrived"),
+                    ("Монтаж", "qty_installing"),
+                    ("Смонтировано", "qty_installed"),
+                ]
+                stage_labels = [x[0] for x in stage_columns]
 
                 rows = []
                 for _, t in templates.iterrows():
@@ -1256,40 +1284,147 @@ elif menu == "Объекты":
                     st.info("Для этого заказчика ещё не созданы изделия.")
                 else:
                     management_df = pd.DataFrame(rows)
+                    st.caption(
+                        "Можно менять любую количественную ячейку. Например, если в «Смонтировано» поставить 5, "
+                        "система автоматически проведёт эти 5 через объект → производство → готовую продукцию → транспорт → монтаж."
+                    )
+
                     with st.form(f"object_management_form_{object_id}", clear_on_submit=False):
                         edited_management = st.data_editor(
                             management_df,
                             key=f"object_management_editor_{object_id}",
-                            width="stretch", hide_index=True,
+                            width="stretch",
+                            hide_index=True,
                             column_config={
                                 "ID": st.column_config.NumberColumn("ID", disabled=True),
                                 "Изделие": st.column_config.TextColumn("Изделие", disabled=True),
                                 "Заказано": st.column_config.NumberColumn("Заказано", min_value=0, step=1, format="%d"),
-                                "Новые": st.column_config.NumberColumn("Новые", disabled=True),
-                                "Производство": st.column_config.NumberColumn("Производство", disabled=True),
-                                "Готовая продукция": st.column_config.NumberColumn("Готовая продукция", disabled=True),
-                                "Отгружено": st.column_config.NumberColumn("Отгружено", disabled=True),
-                                "Прибыло": st.column_config.NumberColumn("Прибыло", disabled=True),
-                                "Монтаж": st.column_config.NumberColumn("Монтаж", disabled=True),
-                                "Смонтировано": st.column_config.NumberColumn("Смонтировано", disabled=True),
+                                "Новые": st.column_config.NumberColumn("Новые", min_value=0, step=1, format="%d"),
+                                "Производство": st.column_config.NumberColumn("Производство", min_value=0, step=1, format="%d"),
+                                "Готовая продукция": st.column_config.NumberColumn("Готовая продукция", min_value=0, step=1, format="%d"),
+                                "Отгружено": st.column_config.NumberColumn("Отгружено", min_value=0, step=1, format="%d"),
+                                "Прибыло": st.column_config.NumberColumn("Прибыло", min_value=0, step=1, format="%d"),
+                                "Монтаж": st.column_config.NumberColumn("Монтаж", min_value=0, step=1, format="%d"),
+                                "Смонтировано": st.column_config.NumberColumn("Смонтировано", min_value=0, step=1, format="%d"),
                             },
-                            disabled=["ID", "Изделие", "Новые", "Производство", "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"],
+                            disabled=["ID", "Изделие"],
                         )
                         management_execute = st.form_submit_button("Выполнить", use_container_width=True)
 
                     if management_execute:
                         pending = []
                         errors = []
-                        for _, r in edited_management.iterrows():
+
+                        # Разбираем каждую изменённую строку. В нормальном сценарии
+                        # пользователь меняет одну рабочую ячейку за раз. Если изменено
+                        # несколько этапов одновременно, принимаем их как последовательные
+                        # команды слева направо.
+                        for idx, r in edited_management.iterrows():
                             tid = safe_int(r["ID"])
-                            new_qty = safe_int(r["Заказано"])
+                            name = str(r["Изделие"] or "").strip()
                             old = current_map.get(tid)
-                            old_qty = safe_int(old["quantity_needed"]) if old is not None else 0
-                            locked = 0 if old is None else sum(safe_int(old[c]) for c in ["qty_production", "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"])
-                            if new_qty < locked:
-                                errors.append(f"{r['Изделие']}: нельзя установить {new_qty}, уже прошло этапы {locked} шт.")
-                            elif new_qty != old_qty:
-                                pending.append((tid, str(r["Изделие"]), old_qty, new_qty))
+                            old_state = {
+                                "Заказано": safe_int(old["quantity_needed"]) if old is not None else 0,
+                                "Новые": safe_int(old["qty_new"]) if old is not None else 0,
+                                "Производство": safe_int(old["qty_production"]) if old is not None else 0,
+                                "Готовая продукция": safe_int(old["qty_ready"]) if old is not None else 0,
+                                "Отгружено": safe_int(old["qty_shipped"]) if old is not None else 0,
+                                "Прибыло": safe_int(old["qty_arrived"]) if old is not None else 0,
+                                "Монтаж": safe_int(old["qty_installing"]) if old is not None else 0,
+                                "Смонтировано": safe_int(old["qty_installed"]) if old is not None else 0,
+                            }
+                            requested = {c: safe_int(r[c]) for c in ["Заказано"] + stage_labels}
+                            changed = [c for c in ["Заказано"] + stage_labels if requested[c] != old_state[c]]
+                            if not changed:
+                                continue
+
+                            # Один или несколько изменённых этапов превращаем в команды.
+                            # Последовательно применяем изменения к виртуальному состоянию.
+                            state = old_state.copy()
+                            commands = []
+                            for col in changed:
+                                target = requested[col]
+                                current_value = state[col]
+                                if target < current_value:
+                                    errors.append(
+                                        f"{name}: нельзя уменьшать «{col}» с {current_value} до {target}. "
+                                        "Движения уже записаны в истории."
+                                    )
+                                    continue
+
+                                delta = target - current_value
+                                if delta == 0:
+                                    continue
+
+                                if col == "Заказано":
+                                    # Увеличение заказа создаёт новые единицы на старте.
+                                    state["Заказано"] += delta
+                                    state["Новые"] += delta
+                                    commands.append(("order", delta))
+                                    continue
+
+                                if col == "Новые":
+                                    # «Новые» — это стартовый остаток заказа, а не этап,
+                                    # через который нужно что-либо проводить. Если пользователь
+                                    # поставил здесь 5, создаём/увеличиваем заказ на 5 и оставляем
+                                    # все 5 именно в новых.
+                                    state["Заказано"] += delta
+                                    state["Новые"] += delta
+                                    commands.append(("order", delta))
+                                    continue
+
+                                stage_idx = stage_labels.index(col)
+                                # Для увеличения этапа сначала используем доступные единицы
+                                # на предыдущих этапах, а если их недостаточно — автоматически
+                                # создаём заказ и проводим недостающее количество с нуля.
+                                available_upstream = state["Новые"] + sum(
+                                    state[stage_labels[j]] for j in range(stage_idx)
+                                )
+                                if available_upstream < delta:
+                                    extra = delta - available_upstream
+                                    state["Заказано"] += extra
+                                    state["Новые"] += extra
+                                    commands.append(("order", extra))
+
+                                # Перемещаем delta из ближайших предыдущих этапов.
+                                remaining = delta
+                                for j in range(stage_idx - 1, -1, -1):
+                                    prev_col = stage_labels[j]
+                                    take = min(state[prev_col], remaining)
+                                    if take:
+                                        state[prev_col] -= take
+                                        remaining -= take
+                                        commands.append(("move", j, stage_idx, take))
+                                    if remaining == 0:
+                                        break
+                                if remaining:
+                                    # Остаток берётся из «Новые».
+                                    take = min(state["Новые"], remaining)
+                                    state["Новые"] -= take
+                                    remaining -= take
+                                    if take:
+                                        commands.append(("move", -1, stage_idx, take))
+                                if remaining:
+                                    errors.append(f"{name}: невозможно провести {remaining} шт. до «{col}».")
+                                else:
+                                    state[col] += delta
+
+                            # «Новые» является остатком заказа, поэтому нормализуем его.
+                            occupied = sum(state[c] for c in stage_labels)
+                            if state["Заказано"] < occupied:
+                                state["Заказано"] = occupied
+                            state["Новые"] = state["Заказано"] - sum(state[c] for c in stage_labels[1:])
+                            if state["Новые"] < 0:
+                                errors.append(f"{name}: итоговое состояние превышает заказанное количество.")
+                                continue
+
+                            pending.append({
+                                "tid": tid,
+                                "name": name,
+                                "old": old_state,
+                                "new": state,
+                                "commands": commands,
+                            })
 
                         if errors:
                             st.error("Операция не подготовлена:\n" + "\n".join(errors))
@@ -1304,34 +1439,186 @@ elif menu == "Объекты":
 
                     pending = st.session_state.get("object_management_pending")
                     if pending and pending.get("object_id") == object_id:
-                        st.warning("Подтвердить заказанные количества?")
-                        for tid, name, old_qty, new_qty in pending["changes"]:
-                            st.write(f"• {name}: {old_qty} → {new_qty} шт.")
+                        st.warning("Подтвердить изменения по объекту?")
+                        for change in pending["changes"]:
+                            old = change["old"]
+                            new = change["new"]
+                            st.write(f"**{change['name']}**")
+                            for col in ["Заказано"] + stage_labels:
+                                if old[col] != new[col]:
+                                    st.write(f"• {col}: {old[col]} → {new[col]}")
+
                         c1, c2 = st.columns(2)
                         with c1:
-                            confirm = st.button("Подтвердить", key=f"management_confirm_{object_id}", use_container_width=True)
+                            confirm = st.button(
+                                "Подтвердить",
+                                key=f"management_confirm_{object_id}",
+                                use_container_width=True,
+                            )
                         with c2:
-                            cancel = st.button("Отменить", key=f"management_cancel_{object_id}", use_container_width=True)
+                            cancel = st.button(
+                                "Отменить",
+                                key=f"management_cancel_{object_id}",
+                                use_container_width=True,
+                            )
+
                         if cancel:
                             st.session_state.pop("object_management_pending", None)
                             st.rerun()
+
                         if confirm:
                             statements = []
-                            for tid, name, old_qty, new_qty in pending["changes"]:
-                                if old_qty == 0:
-                                    statements.append((
-                                        """INSERT INTO reklet.object_items (object_id, product_template_id, template_id, quantity_needed, item_name, quantity, qty_new, status) SELECT %s,%s,%s,%s,%s,%s,%s,'New' WHERE NOT EXISTS (SELECT 1 FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s))""",
-                                        (object_id, tid, tid, new_qty, name, new_qty, new_qty, object_id, tid, tid)
-                                    ))
-                                else:
-                                    delta = new_qty - old_qty
-                                    statements.append((
-                                        "UPDATE reklet.object_items SET quantity_needed=%s, quantity=%s, qty_new=GREATEST(%s - COALESCE(qty_production,0)-COALESCE(qty_ready,0)-COALESCE(qty_shipped,0)-COALESCE(qty_arrived,0)-COALESCE(qty_installing,0)-COALESCE(qty_installed,0),0), status=CASE WHEN %s - COALESCE(qty_production,0)-COALESCE(qty_ready,0)-COALESCE(qty_shipped,0)-COALESCE(qty_arrived,0)-COALESCE(qty_installing,0)-COALESCE(qty_installed,0) <= 0 THEN 'in_progress' ELSE 'New' END WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
-                                        (new_qty, new_qty, new_qty, new_qty, object_id, tid, tid)
-                                    ))
+
+                            for change in pending["changes"]:
+                                tid = change["tid"]
+                                name = change["name"]
+                                old = change["old"]
+                                new = change["new"]
+
+                                # Если изделия на объекте ещё нет, создаём строку.
+                                statements.append((
+                                    """
+                                    INSERT INTO reklet.object_items
+                                        (object_id, product_template_id, template_id,
+                                         quantity_needed, item_name, quantity, qty_new, status)
+                                    SELECT %s,%s,%s,%s,%s,%s,%s,'New'
+                                    WHERE NOT EXISTS (
+                                        SELECT 1 FROM reklet.object_items
+                                        WHERE object_id=%s
+                                          AND (product_template_id=%s OR template_id=%s)
+                                    )
+                                    """,
+                                    (
+                                        object_id, tid, tid,
+                                        new["Заказано"], name, new["Заказано"], new["Новые"],
+                                        object_id, tid, tid
+                                    )
+                                ))
+
+                                # Сохраняем итоговое состояние всех ячеек.
+                                statements.append((
+                                    """
+                                    UPDATE reklet.object_items
+                                    SET quantity_needed=%s,
+                                        quantity=%s,
+                                        qty_new=%s,
+                                        qty_production=%s,
+                                        qty_ready=%s,
+                                        qty_shipped=%s,
+                                        qty_arrived=%s,
+                                        qty_installing=%s,
+                                        qty_installed=%s,
+                                        production_status=CASE
+                                            WHEN %s >= quantity_needed THEN 'completed'
+                                            WHEN %s > 0 THEN 'in_progress'
+                                            ELSE 'New'
+                                        END,
+                                        installation_status=CASE
+                                            WHEN %s >= quantity_needed THEN 'completed'
+                                            WHEN %s > 0 THEN 'in_progress'
+                                            ELSE 'New'
+                                        END,
+                                        production_progress_pct=CASE WHEN %s>0 THEN LEAST(100,ROUND(%s::numeric/%s*100)) ELSE 0 END,
+                                        installation_progress_pct=CASE WHEN %s>0 THEN LEAST(100,ROUND(%s::numeric/%s*100)) ELSE 0 END
+                                    WHERE object_id=%s
+                                      AND (product_template_id=%s OR template_id=%s)
+                                    """,
+                                    (
+                                        new["Заказано"], new["Заказано"], new["Новые"],
+                                        new["Производство"], new["Готовая продукция"],
+                                        new["Отгружено"], new["Прибыло"], new["Монтаж"],
+                                        new["Смонтировано"],
+                                        new["Производство"], new["Производство"],
+                                        new["Смонтировано"], new["Монтаж"],
+                                        new["Заказано"], new["Производство"], new["Заказано"],
+                                        new["Заказано"], new["Смонтировано"], new["Заказано"],
+                                        object_id, tid, tid
+                                    )
+                                ))
+
+                                # История каждого перехода. Если пользователь сразу
+                                # ставит количество в конечную ячейку, например
+                                # «Смонтировано = 5», здесь будут записаны ВСЕ переходы:
+                                # производство -> готовая продукция -> транспорт -> объект -> монтаж.
+                                def add_stage_history(from_idx, to_idx, qty):
+                                    for transition in range(from_idx + 1, to_idx + 1):
+                                        if transition == 0:
+                                            statements.append((
+                                                "INSERT INTO reklet.production_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'start',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                                (qty, object_id, tid, tid)
+                                            ))
+                                        elif transition == 1:
+                                            statements.append((
+                                                "INSERT INTO reklet.production_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'completed',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                                (qty, object_id, tid, tid)
+                                            ))
+                                        elif transition == 2:
+                                            statements.append((
+                                                "INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ready',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                                (qty, object_id, tid, tid)
+                                            ))
+                                        elif transition == 3:
+                                            statements.extend([
+                                                (
+                                                    "INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ship',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                                    (qty, object_id, tid, tid)
+                                                ),
+                                                (
+                                                    "INSERT INTO reklet.transport_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ship',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                                    (qty, object_id, tid, tid)
+                                                ),
+                                            ])
+                                        elif transition == 4:
+                                            statements.extend([
+                                                (
+                                                    "INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'arrive',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                                    (qty, object_id, tid, tid)
+                                                ),
+                                                (
+                                                    "INSERT INTO reklet.transport_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'arrive',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                                    (qty, object_id, tid, tid)
+                                                ),
+                                            ])
+                                        elif transition == 5:
+                                            statements.append((
+                                                "INSERT INTO reklet.installation_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'start',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                                (qty, object_id, tid, tid)
+                                            ))
+                                        elif transition == 6:
+                                            statements.append((
+                                                "INSERT INTO reklet.installation_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'complete',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                                (qty, object_id, tid, tid)
+                                            ))
+
+                                for cmd in change["commands"]:
+                                    if cmd[0] == "order":
+                                        # Заказ уже создаёт количество на старте цепочки.
+                                        statements.append((
+                                            "INSERT INTO reklet.production_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'order',%s FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)",
+                                            (cmd[1], object_id, tid, tid)
+                                        ))
+                                    else:
+                                        _, from_idx, to_idx, qty = cmd
+                                        if qty > 0:
+                                            add_stage_history(from_idx, to_idx, qty)
+
+                                # finished_goods хранит фактический остаток готовой продукции.
+                                # Приводим его к значению ячейки «Готовая продукция», чтобы
+                                # последующая обычная операция склада продолжила работать.
+                                statements.extend([
+                                    (
+                                        "UPDATE reklet.finished_goods SET quantity=0,status='shipped' WHERE object_item_id=(SELECT id FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s) LIMIT 1) AND status='ready'",
+                                        (object_id, tid, tid)
+                                    ),
+                                    (
+                                        "INSERT INTO reklet.finished_goods (object_item_id,object_id,quantity,status) SELECT id,object_id,%s,'ready' FROM reklet.object_items WHERE object_id=%s AND (product_template_id=%s OR template_id=%s) AND %s>0",
+                                        (new["Готовая продукция"], object_id, tid, tid, new["Готовая продукция"])
+                                    ),
+                                ])
+
                             run_transaction(statements)
                             st.session_state.pop("object_management_pending", None)
-                            st.success("Заказ по объекту обновлён.")
+                            st.success("Изменения по объекту выполнены. Все необходимые этапы и движения записаны.")
                             st.rerun()
 
     # ------------------------------------------------------------
