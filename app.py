@@ -3753,23 +3753,100 @@ elif menu == "Зарплата":
             view = payroll_items.copy()
             view["Себестоимость материалов"] = view["material_cost_per_unit"] * view["quantity_needed"]
             view["Количество"] = view["quantity_needed"]
-            view["Зарплата транспортировки"] = view["Себестоимость материалов"] * 0.10 + view["distance_km"] * 2
-            view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие", "distance_km":"Расстояние, км"})
-            st.caption("Зарплата транспортировки рассчитывается сразу на всё количество изделий, указанное в объекте: 10% от себестоимости материалов этого количества + расстояние × 2 условные единицы.")
-            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Расстояние, км", "Зарплата транспортировки"]], width="stretch", hide_index=True)
+            # 10% рассчитывается отдельно по каждому изделию, но стоимость
+            # расстояния до объекта начисляется один раз на весь объект.
+            view["Зарплата 10%"] = view["Себестоимость материалов"] * 0.10
+            view = view.rename(columns={
+                "object_name":"Объект",
+                "client_name":"Заказчик",
+                "item_name":"Изделие",
+                "distance_km":"Расстояние, км"
+            })
+            st.caption(
+                "Транспортировка = 10% от общей себестоимости материалов всех изделий объекта "
+                "+ расстояние до объекта × 2. Расстояние оплачивается только один раз на объект, "
+                "независимо от количества изделий."
+            )
+            st.dataframe(
+                view[["Объект", "Заказчик", "Изделие", "Себестоимость материалов", "Количество", "Зарплата 10%"]],
+                width="stretch",
+                hide_index=True
+            )
+
+            transport_summary = (
+                payroll_items.assign(
+                    material_total=lambda x: x["material_cost_per_unit"] * x["quantity_needed"],
+                    salary_10=lambda x: x["material_cost_per_unit"] * x["quantity_needed"] * 0.10
+                )
+                .groupby(["object_id", "object_name", "client_name"], as_index=False)
+                .agg(
+                    **{
+                        "Себестоимость материалов": ("material_total", "sum"),
+                        "Зарплата 10%": ("salary_10", "sum"),
+                        "Расстояние, км": ("distance_km", "first")
+                    }
+                )
+            )
+            transport_summary["Расстояние × 2"] = transport_summary["Расстояние, км"] * 2
+            transport_summary["Итого зарплата транспортировки"] = (
+                transport_summary["Зарплата 10%"] + transport_summary["Расстояние × 2"]
+            )
+            transport_summary = transport_summary.rename(columns={
+                "object_name":"Объект",
+                "client_name":"Заказчик"
+            })
+            st.subheader("Итого по объектам")
+            st.dataframe(
+                transport_summary[[
+                    "Объект", "Заказчик", "Себестоимость материалов",
+                    "Зарплата 10%", "Расстояние, км", "Расстояние × 2",
+                    "Итого зарплата транспортировки"
+                ]],
+                width="stretch",
+                hide_index=True
+            )
 
         else:
             view = payroll_items.copy()
             view["Производство"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.50
             view["Монтаж"] = view["material_cost_per_unit"] * view["quantity_needed"] * 1.40
-            view["Доставка"] = (view["material_cost_per_unit"] * view["quantity_needed"] * 0.10) + view["distance_km"] * 2
-            view["Итого"] = view["Производство"] + view["Монтаж"] + view["Доставка"]
+            view["Доставка 10%"] = view["material_cost_per_unit"] * view["quantity_needed"] * 0.10
+            view["Итого без расстояния"] = view["Производство"] + view["Монтаж"] + view["Доставка 10%"]
             view = view.rename(columns={"object_name":"Объект", "client_name":"Заказчик", "item_name":"Изделие"})
-            st.dataframe(view[["Объект", "Заказчик", "Изделие", "Производство", "Монтаж", "Доставка", "Итого"]], width="stretch", hide_index=True)
+            st.dataframe(
+                view[["Объект", "Заказчик", "Изделие", "Производство", "Монтаж", "Доставка 10%", "Итого без расстояния"]],
+                width="stretch",
+                hide_index=True
+            )
 
-            summary = view.groupby(["Объект", "Заказчик"], as_index=False)[["Производство", "Монтаж", "Доставка", "Итого"]].sum()
+            summary = (
+                payroll_items.assign(
+                    Производство=lambda x: x["material_cost_per_unit"] * x["quantity_needed"] * 1.50,
+                    Монтаж=lambda x: x["material_cost_per_unit"] * x["quantity_needed"] * 1.40,
+                    **{
+                        "Доставка 10%": lambda x: x["material_cost_per_unit"] * x["quantity_needed"] * 0.10
+                    }
+                )
+                .groupby(["object_id", "object_name", "client_name"], as_index=False)
+                .agg(
+                    Производство=("Производство", "sum"),
+                    Монтаж=("Монтаж", "sum"),
+                    **{
+                        "Доставка 10%": ("Доставка 10%", "sum"),
+                        "Расстояние, км": ("distance_km", "first")
+                    }
+                )
+            )
+            summary["Расстояние × 2"] = summary["Расстояние, км"] * 2
+            summary["Доставка"] = summary["Доставка 10%"] + summary["Расстояние × 2"]
+            summary["Итого"] = summary["Производство"] + summary["Монтаж"] + summary["Доставка"]
+            summary = summary.rename(columns={"object_name":"Объект", "client_name":"Заказчик"})
             st.subheader("Сводка по объектам")
-            st.dataframe(summary, width="stretch", hide_index=True)
+            st.dataframe(
+                summary[["Объект", "Заказчик", "Производство", "Монтаж", "Доставка 10%", "Расстояние, км", "Расстояние × 2", "Доставка", "Итого"]],
+                width="stretch",
+                hide_index=True
+            )
 
 
 # ============================================================
