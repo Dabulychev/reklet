@@ -2467,14 +2467,13 @@ elif menu == "Склад материалов":
         ("Категории материалов", "categories"),
         ("Приход материалов", "receipt"),
         ("Выдача материалов", "issue"),
-        ("Поставщики материала", "supplier_search"),
         ("Движение материалов", "movement"),
     ]
 
     if "material_section" not in st.session_state:
         st.session_state.material_section = "list"
 
-    nav_cols = st.columns(7)
+    nav_cols = st.columns(len(material_sections))
     for col, (label, value) in zip(nav_cols, material_sections):
         if col.button(label, key=f"material_nav_{value}", use_container_width=True):
             st.session_state.material_section = value
@@ -3083,8 +3082,16 @@ elif menu == "Поставщики":
     st.header("Поставщики")
 
     supplier_sub = render_button_nav(
-        ["Перечень поставщиков","Создать поставщика","Материалы поставщика","Коррекция удаление Поставщиков"],
-        "suppliers_navigation","suppliers_nav",columns_per_row=4
+        [
+            "Перечень поставщиков",
+            "Создать поставщика",
+            "Материалы поставщика",
+            "Поиск поставщика",
+            "Коррекция и удаление поставщиков"
+        ],
+        "suppliers_navigation",
+        "suppliers_nav",
+        columns_per_row=5
     )
     suppliers=get_suppliers()
 
@@ -3125,84 +3132,6 @@ elif menu == "Поставщики":
 
     elif supplier_sub=="Материалы поставщика":
         st.subheader("Материалы поставщика")
-
-        # ========================================================
-        # ОБРАТНЫЙ ПОИСК: МАТЕРИАЛ -> ПОСТАВЩИКИ
-        # ========================================================
-        st.markdown("### Поиск поставщиков по материалу")
-        all_materials = get_materials_with_categories()
-        material_categories = get_material_categories()
-
-        if all_materials.empty:
-            st.info("Материалов пока нет.")
-        else:
-            category_options = ["Все категории", "Без категории"] + (
-                material_categories["name"].astype(str).tolist()
-                if not material_categories.empty else []
-            )
-
-            reverse_category = st.selectbox(
-                "Категория материала",
-                category_options,
-                key="supplier_reverse_material_category"
-            )
-
-            reverse_filtered = all_materials.copy()
-            if reverse_category == "Без категории":
-                reverse_filtered = reverse_filtered[
-                    reverse_filtered["category_id"].isna()
-                ].copy()
-            elif reverse_category != "Все категории":
-                reverse_filtered = reverse_filtered[
-                    reverse_filtered["category_name"].fillna("").astype(str).eq(reverse_category)
-                ].copy()
-
-            if reverse_filtered.empty:
-                st.info("В выбранной категории материалов нет.")
-            else:
-                reverse_material_map = {
-                    f"{int(row['id'])} — {row['name']}": int(row['id'])
-                    for _, row in reverse_filtered.sort_values("name").iterrows()
-                }
-                selected_reverse_material = st.selectbox(
-                    "Материал",
-                    list(reverse_material_map.keys()),
-                    key=f"supplier_reverse_material_{reverse_category}"
-                )
-                reverse_material_id = reverse_material_map[selected_reverse_material]
-
-                suppliers_for_material = run_query(
-                    """
-                    SELECT
-                        s.id,
-                        s.name AS supplier,
-                        ms.purchase_price,
-                        ms.supplier_code,
-                        ms.conditions,
-                        ms.is_preferred
-                    FROM reklet.material_suppliers ms
-                    JOIN reklet.suppliers s
-                        ON s.id = ms.supplier_id
-                    WHERE ms.material_id=%s
-                    ORDER BY s.name
-                    """,
-                    (reverse_material_id,),
-                    fetch=True
-                )
-
-                if suppliers_for_material.empty:
-                    st.info("Для этого материала поставщики не назначены.")
-                else:
-                    supplier_view = suppliers_for_material.copy()
-                    supplier_view.columns = [
-                        "ID",
-                        "Поставщик",
-                        "Цена",
-                        "Код поставщика",
-                        "Условия",
-                        "Предпочтительный"
-                    ]
-                    st.dataframe(supplier_view, width="stretch", hide_index=True)
 
         st.markdown("---")
 
@@ -3277,7 +3206,90 @@ elif menu == "Поставщики":
                         st.success("Материал убран из списка поставщика.")
                         st.rerun()
 
-    elif supplier_sub=="Коррекция удаление Поставщиков":
+
+    elif supplier_sub=="Поиск поставщика":
+        st.subheader("Поиск поставщика")
+
+        all_materials = get_materials_with_categories()
+        material_categories = get_material_categories()
+
+        if all_materials.empty:
+            st.info("Материалов пока нет.")
+        else:
+            category_options = ["Все категории", "Без категории"] + (
+                material_categories["name"].astype(str).tolist()
+                if not material_categories.empty else []
+            )
+
+            search_category = st.selectbox(
+                "Категория материала",
+                category_options,
+                key="supplier_search_category"
+            )
+
+            filtered_materials = all_materials.copy()
+            if search_category == "Без категории":
+                filtered_materials = filtered_materials[
+                    filtered_materials["category_id"].isna()
+                ].copy()
+            elif search_category != "Все категории":
+                filtered_materials = filtered_materials[
+                    filtered_materials["category_name"].fillna("").astype(str).eq(search_category)
+                ].copy()
+
+            if filtered_materials.empty:
+                st.info("В выбранной категории материалов нет.")
+            else:
+                material_map = {
+                    f"{int(row['id'])} — {row['name']}": int(row['id'])
+                    for _, row in filtered_materials.sort_values("name").iterrows()
+                }
+
+                selected_material = st.selectbox(
+                    "Материал",
+                    list(material_map.keys()),
+                    key="supplier_search_material_new"
+                )
+                material_id = material_map[selected_material]
+
+                suppliers_for_material = run_query(
+                    """
+                    SELECT
+                        s.id,
+                        s.name AS supplier,
+                        ms.purchase_price,
+                        ms.supplier_code,
+                        ms.conditions,
+                        ms.is_preferred
+                    FROM reklet.material_suppliers ms
+                    JOIN reklet.suppliers s
+                        ON s.id = ms.supplier_id
+                    WHERE ms.material_id = %s
+                    ORDER BY s.name
+                    """,
+                    (material_id,),
+                    fetch=True
+                )
+
+                if suppliers_for_material.empty:
+                    st.info("Для этого материала поставщики не назначены.")
+                else:
+                    supplier_view = suppliers_for_material.copy()
+                    supplier_view.columns = [
+                        "ID",
+                        "Поставщик",
+                        "Цена",
+                        "Код поставщика",
+                        "Условия",
+                        "Предпочтительный"
+                    ]
+                    st.dataframe(
+                        supplier_view,
+                        width="stretch",
+                        hide_index=True
+                    )
+
+    elif supplier_sub=="Коррекция и удаление поставщиков":
         st.subheader("Коррекция поставщиков")
         if suppliers.empty:
             st.info("Поставщиков нет.")
