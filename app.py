@@ -1290,7 +1290,7 @@ elif menu == "Объекты":
                 st.dataframe(view, width="stretch", hide_index=True)
 
     # ------------------------------------------------------------
-    # УПРАВЛЕНИЕ ОБЪЕКТАМИ — EXCEL-ПОДОБНОЕ УПРАВЛЕНИЕ ВСЕЙ ЦЕПОЧКОЙ
+    # УПРАВЛЕНИЕ ОБЪЕКТАМИ — ЕДНА СТРОКА НА ИЗДЕЛИЕ
     # ------------------------------------------------------------
     elif sub == "Управление объектами":
         objects = get_objects().sort_values("id", ascending=False).copy()
@@ -1300,7 +1300,6 @@ elif menu == "Объекты":
         if objects.empty:
             st.info("Объектов нет.")
         else:
-            # В управлении сохраняем оба фильтра: сначала заказчик, затем объект.
             client_options = ["Все заказчики"] + (
                 clients["name"].fillna("").astype(str).str.strip().loc[lambda x: x != ""].sort_values().unique().tolist()
                 if not clients.empty else []
@@ -1355,27 +1354,44 @@ elif menu == "Объекты":
                         if pd.notna(tid):
                             current_map[int(tid)] = r
 
+                # One row per product. Existing object items are retained even if
+                # the product template is no longer present in the client filter.
+                template_rows = {int(t["id"]): t for _, t in templates.iterrows()}
+                product_ids = sorted(set(template_rows) | set(current_map))
+
                 rows = []
-                for _, t in templates.sort_values("id").iterrows():
-                    tid = int(t["id"])
+                for tid in product_ids:
+                    t = template_rows.get(tid)
                     old = current_map.get(tid)
+                    name = str(
+                        (t["name"] if t is not None else old.get("item_name", ""))
+                        or ""
+                    ).strip()
+
                     ordered = safe_int(old["quantity_needed"]) if old is not None else 0
-                    qty_new = safe_int(old["qty_new"]) if old is not None else 0
+                    qty_production = safe_int(old["qty_production"]) if old is not None else 0
                     qty_ready = safe_int(old["qty_ready"]) if old is not None else 0
                     qty_shipped = safe_int(old["qty_shipped"]) if old is not None else 0
                     qty_arrived = safe_int(old["qty_arrived"]) if old is not None else 0
                     qty_installing = safe_int(old["qty_installing"]) if old is not None else 0
                     qty_installed = safe_int(old["qty_installed"]) if old is not None else 0
 
-                    manufactured = max(
-                        ordered - qty_new, 0
+                    # Keep the quantity identity derived from the physical stages.
+                    # Older records may have stale qty_new values; deriving it here
+                    # prevents the management screen from displaying a false remainder.
+                    physical_allocated = (
+                        qty_production + qty_ready + qty_shipped +
+                        qty_arrived + qty_installing + qty_installed
                     )
+                    qty_new = max(ordered - physical_allocated, 0)
+                    remaining_manufacture = qty_new
+
                     rows.append({
                         "ID": tid,
-                        "Изделие": str(t["name"]),
+                        "Изделие": name,
                         "1.1 Всего": ordered,
                         "1.2 Коррекция": 0,
-                        "2.1 Осталось": qty_new,
+                        "2.1 Осталось изготовить": remaining_manufacture,
                         "2.2 Изготовлено": 0,
                         "3.1 Ожидается": ordered,
                         "3.2 Прибыло": qty_ready,
@@ -1386,8 +1402,8 @@ elif menu == "Объекты":
                         "5.1 Получено": qty_arrived,
                         "5.2 Установлено": 0,
                         "5.4 Всего установлено": qty_installed,
-                        "_manufactured": manufactured,
                         "_qty_new": qty_new,
+                        "_qty_production": qty_production,
                         "_qty_ready": qty_ready,
                         "_qty_shipped": qty_shipped,
                         "_qty_arrived": qty_arrived,
@@ -1399,16 +1415,15 @@ elif menu == "Объекты":
                     st.info("Для этого заказчика ещё не созданы изделия.")
                 else:
                     management_df = pd.DataFrame(rows)
-                    editor_df = management_df[
-                        [
-                            "ID", "Изделие",
-                            "1.1 Всего", "1.2 Коррекция",
-                            "2.1 Осталось", "2.2 Изготовлено",
-                            "3.1 Ожидается", "3.2 Прибыло", "3.3 Отгружено", "3.4 Осталось",
-                            "4.1 В пути", "4.2 Доставлен",
-                            "5.1 Получено", "5.2 Установлено", "5.4 Всего установлено"
-                        ]
-                    ].copy()
+                    editor_columns = [
+                        "ID", "Изделие",
+                        "1.1 Всего", "1.2 Коррекция",
+                        "2.1 Осталось изготовить", "2.2 Изготовлено",
+                        "3.1 Ожидается", "3.2 Прибыло", "3.3 Отгружено", "3.4 Осталось",
+                        "4.1 В пути", "4.2 Доставлен",
+                        "5.1 Получено", "5.2 Установлено", "5.4 Всего установлено"
+                    ]
+                    editor_df = management_df[editor_columns].copy()
 
                     with st.form(f"object_management_form_{object_id}", clear_on_submit=True):
                         edited_management = st.data_editor(
@@ -1418,24 +1433,24 @@ elif menu == "Объекты":
                             hide_index=True,
                             column_config={
                                 "ID": st.column_config.NumberColumn("№", disabled=True),
-                                "Изделие": st.column_config.TextColumn("Этап / Параметр", disabled=True),
-                                "1.1 Всего": st.column_config.NumberColumn("Система: всего", disabled=True, format="%d"),
-                                "1.2 Коррекция": st.column_config.NumberColumn("Действие: коррекция", min_value=-100000, step=1, format="%d"),
-                                "2.1 Осталось": st.column_config.NumberColumn("Осталось", disabled=True, format="%d"),
-                                "2.2 Изготовлено": st.column_config.NumberColumn("Действие: изготовлено", min_value=0, step=1, format="%d"),
-                                "3.1 Ожидается": st.column_config.NumberColumn("Ожидается", disabled=True, format="%d"),
-                                "3.2 Прибыло": st.column_config.NumberColumn("Прибыло", disabled=True, format="%d"),
-                                "3.3 Отгружено": st.column_config.NumberColumn("Действие: отгружено", min_value=0, step=1, format="%d"),
-                                "3.4 Осталось": st.column_config.NumberColumn("Осталось", disabled=True, format="%d"),
-                                "4.1 В пути": st.column_config.NumberColumn("В пути", disabled=True, format="%d"),
-                                "4.2 Доставлен": st.column_config.NumberColumn("Действие: доставлен", min_value=0, step=1, format="%d"),
-                                "5.1 Получено": st.column_config.NumberColumn("Получено", disabled=True, format="%d"),
-                                "5.2 Установлено": st.column_config.NumberColumn("Действие: установлено", min_value=0, step=1, format="%d"),
-                                "5.4 Всего установлено": st.column_config.NumberColumn("Всего установлено", disabled=True, format="%d"),
+                                "Изделие": st.column_config.TextColumn("Изделие", disabled=True),
+                                "1.1 Всего": st.column_config.NumberColumn("1.1 Заказ — Всего", disabled=True, format="%d"),
+                                "1.2 Коррекция": st.column_config.NumberColumn("1.2 Заказ — Коррекция", min_value=-100000, step=1, format="%d"),
+                                "2.1 Осталось изготовить": st.column_config.NumberColumn("2.1 Производство — Осталось изготовить", disabled=True, format="%d"),
+                                "2.2 Изготовлено": st.column_config.NumberColumn("2.2 Производство — Изготовлено", min_value=0, step=1, format="%d"),
+                                "3.1 Ожидается": st.column_config.NumberColumn("3.1 Склад — Ожидается", disabled=True, format="%d"),
+                                "3.2 Прибыло": st.column_config.NumberColumn("3.2 Склад — Прибыло", disabled=True, format="%d"),
+                                "3.3 Отгружено": st.column_config.NumberColumn("3.3 Склад — Отгружено", min_value=0, step=1, format="%d"),
+                                "3.4 Осталось": st.column_config.NumberColumn("3.4 Склад — Осталось", disabled=True, format="%d"),
+                                "4.1 В пути": st.column_config.NumberColumn("4.1 Транспорт — В пути", disabled=True, format="%d"),
+                                "4.2 Доставлен": st.column_config.NumberColumn("4.2 Транспорт — Доставлен", min_value=0, step=1, format="%d"),
+                                "5.1 Получено": st.column_config.NumberColumn("5.1 Объект — Получено", disabled=True, format="%d"),
+                                "5.2 Установлено": st.column_config.NumberColumn("5.2 Объект — Установлено", min_value=0, step=1, format="%d"),
+                                "5.4 Всего установлено": st.column_config.NumberColumn("5.4 Объект — Всего установлено", disabled=True, format="%d"),
                             },
                             disabled=[
                                 "ID", "Изделие",
-                                "1.1 Всего", "2.1 Осталось",
+                                "1.1 Всего", "2.1 Осталось изготовить",
                                 "3.1 Ожидается", "3.2 Прибыло", "3.4 Осталось",
                                 "4.1 В пути", "5.1 Получено", "5.4 Всего установлено"
                             ],
@@ -1457,6 +1472,7 @@ elif menu == "Объекты":
                             old_state = {
                                 "order": safe_int(base["1.1 Всего"]),
                                 "new": safe_int(base["_qty_new"]),
+                                "production": safe_int(base["_qty_production"]),
                                 "ready": safe_int(base["_qty_ready"]),
                                 "shipped": safe_int(base["_qty_shipped"]),
                                 "arrived": safe_int(base["_qty_arrived"]),
@@ -1472,11 +1488,17 @@ elif menu == "Объекты":
                             delivered_action = safe_int(r["4.2 Доставлен"])
                             installed_action = safe_int(r["5.2 Установлено"])
 
-                            if manufactured_action < 0 or shipped_action < 0 or delivered_action < 0 or installed_action < 0:
-                                errors.append(f"{name}: действия на этапах не могут быть отрицательными.")
+                            if any(v < 0 for v in (
+                                manufactured_action,
+                                shipped_action,
+                                delivered_action,
+                                installed_action,
+                            )):
+                                errors.append(f"{name}: действия производства/склада/транспорта/монтажа не могут быть отрицательными.")
                                 continue
 
-                            # Коррекция заказа.
+                            # Order correction changes only the unprocessed part.
+                            # A reduction cannot invalidate quantities already in the chain.
                             if correction < 0:
                                 decrease = -correction
                                 if decrease > state["new"]:
@@ -1491,68 +1513,97 @@ elif menu == "Объекты":
                                 state["order"] += correction
                                 state["new"] += correction
 
-                            def ensure_stage(target_stage, qty):
-                                """
-                                Ensure qty is available at target stage by automatically
-                                creating/advancing upstream quantities.
-                                Stages: 0=new, 1=ready, 2=shipped, 3=arrived, 4=installed.
-                                """
+                            def complete_production(qty):
+                                """Complete exactly qty units and put them on the warehouse."""
                                 if qty <= 0:
                                     return
 
-                                # Build enough quantity through all preceding stages.
-                                for stage in range(1, target_stage + 1):
-                                    available_name = ["new", "ready", "shipped", "arrived"][stage - 1]
-                                    needed = qty - state[available_name]
-                                    if needed <= 0:
-                                        continue
+                                from_production = min(qty, state["production"])
+                                from_new = qty - from_production
 
-                                    # Ensure previous stage has the needed amount.
-                                    if stage == 1:
-                                        if state["new"] < needed:
-                                            extra = needed - state["new"]
-                                            state["order"] += extra
-                                            state["new"] += extra
-                                            commands.append(("order", extra))
-                                    else:
-                                        ensure_stage(stage - 1, needed)
+                                if from_new > state["new"]:
+                                    available = state["production"] + state["new"]
+                                    raise ValueError(
+                                        f"для изготовления {qty} шт. доступно только {available} шт."
+                                    )
 
-                                    source_name = ["new", "ready", "shipped", "arrived"][stage - 2] if stage > 1 else "new"
-                                    move = min(needed, state[source_name])
-                                    if move < needed:
-                                        raise ValueError(
-                                            f"Недостаточно количества для перехода на этап {stage}."
-                                        )
-                                    state[source_name] -= move
-                                    state[available_name] += move
-                                    commands.append(("move", stage - 1, stage, move))
+                                if from_production:
+                                    state["production"] -= from_production
+                                if from_new:
+                                    state["new"] -= from_new
 
-                            # 2.2 Изготовлено: доводим нужное количество до готовой продукции.
-                            if manufactured_action:
-                                ensure_stage(1, manufactured_action)
+                                state["ready"] += qty
+                                commands.append(("production", qty))
 
-                            # 3.3 Отгружено: при необходимости автоматически изготовить недостающее.
-                            if shipped_action:
-                                ensure_stage(2, shipped_action)
+                            def ensure_ready(qty):
+                                """Ensure qty is physically available in the warehouse."""
+                                shortage = max(qty - state["ready"], 0)
+                                if shortage:
+                                    complete_production(shortage)
 
-                            # 4.2 Доставлен: автоматически пройти производство + склад + транспорт.
-                            if delivered_action:
-                                ensure_stage(3, delivered_action)
+                            def move_to_shipped(qty):
+                                ensure_ready(qty)
+                                state["ready"] -= qty
+                                state["shipped"] += qty
+                                commands.append(("ship", qty))
 
-                            # 5.2 Установлено: автоматически пройти всю цепочку до монтажа.
-                            if installed_action:
-                                ensure_stage(4, installed_action)
+                            def ensure_shipped(qty):
+                                """Ensure qty is physically in transport."""
+                                shortage = max(qty - state["shipped"], 0)
+                                if shortage:
+                                    move_to_shipped(shortage)
 
-                            if state["order"] < 0:
-                                errors.append(f"{name}: заказ не может стать отрицательным.")
+                            def move_to_arrived(qty):
+                                ensure_shipped(qty)
+                                state["shipped"] -= qty
+                                state["arrived"] += qty
+                                commands.append(("arrive", qty))
+
+                            def ensure_arrived(qty):
+                                """Ensure qty is physically received at the object."""
+                                shortage = max(qty - state["arrived"], 0)
+                                if shortage:
+                                    move_to_arrived(shortage)
+
+                            def install_qty(qty):
+                                ensure_arrived(qty)
+                                state["arrived"] -= qty
+                                state["installed"] += qty
+                                commands.append(("install", qty))
+
+                            # Every green field is a one-time movement command.
+                            # Missing upstream stock is generated automatically from the
+                            # same order, but the order itself is never silently increased.
+                            action_failed = False
+                            for action_name, action_qty, action_fn in (
+                                ("изготовление", manufactured_action, complete_production),
+                                ("отгрузка", shipped_action, move_to_shipped),
+                                ("доставка", delivered_action, move_to_arrived),
+                                ("установка", installed_action, install_qty),
+                            ):
+                                if not action_qty:
+                                    continue
+                                try:
+                                    action_fn(action_qty)
+                                except ValueError as exc:
+                                    errors.append(f"{name}: {action_name} {action_qty} шт. — {exc}")
+                                    action_failed = True
+                                    break
+
+                            if action_failed:
                                 continue
 
-                            processed = state["ready"] + state["shipped"] + state["arrived"] + state["installing"] + state["installed"]
-                            state["new"] = max(state["order"] - processed, 0)
-
-                            if processed > state["order"]:
-                                errors.append(f"{name}: итоговое количество превышает заказ.")
+                            # Rebuild the unprocessed remainder from the order identity.
+                            allocated = (
+                                state["production"] + state["ready"] + state["shipped"] +
+                                state["arrived"] + state["installing"] + state["installed"]
+                            )
+                            if allocated > state["order"]:
+                                errors.append(
+                                    f"{name}: итоговое количество {allocated} шт. превышает заказ {state['order']} шт."
+                                )
                                 continue
+                            state["new"] = state["order"] - allocated
 
                             changed = (
                                 state != old_state or
@@ -1569,6 +1620,13 @@ elif menu == "Объекты":
                                     "old": old_state,
                                     "new": state,
                                     "commands": commands,
+                                    "actions": {
+                                        "correction": correction,
+                                        "manufactured": manufactured_action,
+                                        "shipped": shipped_action,
+                                        "delivered": delivered_action,
+                                        "installed": installed_action,
+                                    },
                                 })
 
                         if errors:
@@ -1588,15 +1646,20 @@ elif menu == "Объекты":
                         for change in pending["changes"]:
                             old = change["old"]
                             new = change["new"]
+                            actions = change.get("actions", {})
                             st.write(f"**{change['name']}**")
-                            if old["order"] != new["order"]:
-                                st.write(f"• Заказано: {old['order']} → {new['order']}")
+                            if actions.get("correction"):
+                                st.write(f"• Коррекция заказа: {actions['correction']:+d}")
+                            if old["new"] != new["new"]:
+                                st.write(f"• Осталось не изготовлено: {old['new']} → {new['new']}")
+                            if old["production"] != new["production"]:
+                                st.write(f"• В производстве: {old['production']} → {new['production']}")
                             if old["ready"] != new["ready"]:
-                                st.write(f"• На готовой продукции: {old['ready']} → {new['ready']}")
+                                st.write(f"• На складе: {old['ready']} → {new['ready']}")
                             if old["shipped"] != new["shipped"]:
                                 st.write(f"• В пути: {old['shipped']} → {new['shipped']}")
                             if old["arrived"] != new["arrived"]:
-                                st.write(f"• Получено: {old['arrived']} → {new['arrived']}")
+                                st.write(f"• Получено на объекте: {old['arrived']} → {new['arrived']}")
                             if old["installed"] != new["installed"]:
                                 st.write(f"• Всего установлено: {old['installed']} → {new['installed']}")
 
@@ -1624,7 +1687,6 @@ elif menu == "Объекты":
 
                             for change in pending["changes"]:
                                 tid = change["tid"]
-                                old = change["old"]
                                 new = change["new"]
 
                                 # Create the object-item row if necessary.
@@ -1648,15 +1710,13 @@ elif menu == "Объекты":
                                     )
                                 ))
 
-                                # Set the final physical state.
-                                produced_total = (
-                                    new["ready"] + new["shipped"] +
-                                    new["arrived"] + new["installing"] +
-                                    new["installed"]
+                                production_completed = (
+                                    new["ready"] + new["shipped"] + new["arrived"] +
+                                    new["installing"] + new["installed"]
                                 )
                                 production_status = (
-                                    "completed" if produced_total >= new["order"] and new["order"] > 0
-                                    else "in_progress" if produced_total > 0
+                                    "completed" if new["new"] == 0 and new["production"] == 0 and new["order"] > 0
+                                    else "in_progress" if new["production"] > 0 or production_completed > 0
                                     else "not_started"
                                 )
                                 installation_status = (
@@ -1671,7 +1731,7 @@ elif menu == "Объекты":
                                     SET quantity_needed=%s,
                                         quantity=%s,
                                         qty_new=%s,
-                                        qty_production=0,
+                                        qty_production=%s,
                                         qty_ready=%s,
                                         qty_shipped=%s,
                                         qty_arrived=%s,
@@ -1685,25 +1745,22 @@ elif menu == "Объекты":
                                       AND (product_template_id=%s OR template_id=%s)
                                     """,
                                     (
-                                        new["order"], new["order"], new["new"],
+                                        new["order"], new["order"], new["new"], new["production"],
                                         new["ready"], new["shipped"], new["arrived"],
                                         new["installing"], new["installed"],
                                         production_status,
-                                        new["order"], produced_total, new["order"],
+                                        new["order"], production_completed, new["order"],
                                         installation_status,
                                         new["order"], new["installed"], new["order"],
                                         object_id, tid, tid
                                     )
                                 ))
 
-                                # Write every transition generated by the action.
+                                # Write every transition generated by the command.
                                 for command in change["commands"]:
-                                    if command[0] == "order":
-                                        continue
+                                    kind, qty = command
 
-                                    _, from_stage, to_stage, qty = command
-
-                                    if from_stage == 0 and to_stage == 1:
+                                    if kind == "production":
                                         statements.extend([
                                             (
                                                 """
@@ -1712,7 +1769,7 @@ elif menu == "Объекты":
                                                 SELECT id,object_id,'completed',%s
                                                 FROM reklet.object_items
                                                 WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
-                                                LIMIT 1
+                                                ORDER BY id LIMIT 1
                                                 """,
                                                 (qty, object_id, tid, tid)
                                             ),
@@ -1723,7 +1780,7 @@ elif menu == "Объекты":
                                                 SELECT id,object_id,%s,'ready'
                                                 FROM reklet.object_items
                                                 WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
-                                                LIMIT 1
+                                                ORDER BY id LIMIT 1
                                                 """,
                                                 (qty, object_id, tid, tid)
                                             ),
@@ -1734,31 +1791,53 @@ elif menu == "Объекты":
                                                 SELECT id,object_id,'ready',%s
                                                 FROM reklet.object_items
                                                 WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
-                                                LIMIT 1
+                                                ORDER BY id LIMIT 1
                                                 """,
                                                 (qty, object_id, tid, tid)
                                             ),
                                         ])
 
-                                    elif from_stage == 1 and to_stage == 2:
+                                    elif kind == "ship":
                                         statements.extend([
                                             (
                                                 """
-                                                UPDATE reklet.finished_goods
-                                                SET quantity=GREATEST(quantity-%s,0),
-                                                    status=CASE WHEN quantity-%s<=0 THEN 'shipped' ELSE 'ready' END
-                                                WHERE id=(
-                                                    SELECT id FROM reklet.finished_goods
+                                                WITH ready_rows AS (
+                                                    SELECT
+                                                        id,
+                                                        quantity,
+                                                        COALESCE(
+                                                            SUM(quantity) OVER (
+                                                                ORDER BY created_at,id
+                                                                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                                                            ), 0
+                                                        ) AS prev_quantity
+                                                    FROM reklet.finished_goods
                                                     WHERE object_item_id=(
-                                                        SELECT id FROM reklet.object_items
+                                                        SELECT id
+                                                        FROM reklet.object_items
                                                         WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
-                                                        LIMIT 1
+                                                        ORDER BY id LIMIT 1
                                                     )
-                                                    AND status='ready' AND quantity>0
-                                                    ORDER BY created_at,id LIMIT 1
+                                                      AND status='ready'
+                                                      AND quantity>0
+                                                ),
+                                                updates AS (
+                                                    SELECT
+                                                        id,
+                                                        GREATEST(
+                                                            quantity - GREATEST(LEAST(%s - prev_quantity, quantity),0),
+                                                            0
+                                                        ) AS new_quantity
+                                                    FROM ready_rows
+                                                    WHERE prev_quantity < %s
                                                 )
+                                                UPDATE reklet.finished_goods fg
+                                                SET quantity=updates.new_quantity,
+                                                    status=CASE WHEN updates.new_quantity=0 THEN 'shipped' ELSE 'ready' END
+                                                FROM updates
+                                                WHERE fg.id=updates.id
                                                 """,
-                                                (qty, qty, object_id, tid, tid)
+                                                (object_id, tid, tid, qty, qty)
                                             ),
                                             (
                                                 """
@@ -1767,7 +1846,7 @@ elif menu == "Объекты":
                                                 SELECT id,object_id,'ship',%s
                                                 FROM reklet.object_items
                                                 WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
-                                                LIMIT 1
+                                                ORDER BY id LIMIT 1
                                                 """,
                                                 (qty, object_id, tid, tid)
                                             ),
@@ -1778,22 +1857,62 @@ elif menu == "Объекты":
                                                 SELECT id,object_id,'ship',%s
                                                 FROM reklet.object_items
                                                 WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
-                                                LIMIT 1
+                                                ORDER BY id LIMIT 1
                                                 """,
                                                 (qty, object_id, tid, tid)
                                             ),
                                         ])
 
-                                    elif from_stage == 2 and to_stage == 3:
+                                    elif kind == "arrive":
                                         statements.extend([
                                             (
                                                 """
+                                                WITH shipped_rows AS (
+                                                    SELECT
+                                                        id,
+                                                        quantity,
+                                                        COALESCE(
+                                                            SUM(quantity) OVER (
+                                                                ORDER BY created_at,id
+                                                                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                                                            ), 0
+                                                        ) AS prev_quantity
+                                                    FROM reklet.finished_goods
+                                                    WHERE object_item_id=(
+                                                        SELECT id
+                                                        FROM reklet.object_items
+                                                        WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                        ORDER BY id LIMIT 1
+                                                    )
+                                                      AND status='shipped'
+                                                      AND quantity>0
+                                                ),
+                                                updates AS (
+                                                    SELECT
+                                                        id,
+                                                        GREATEST(
+                                                            quantity - GREATEST(LEAST(%s - prev_quantity, quantity),0),
+                                                            0
+                                                        ) AS new_quantity
+                                                    FROM shipped_rows
+                                                    WHERE prev_quantity < %s
+                                                )
+                                                UPDATE reklet.finished_goods fg
+                                                SET quantity=updates.new_quantity,
+                                                    status=CASE WHEN updates.new_quantity=0 THEN 'arrived' ELSE 'shipped' END
+                                                FROM updates
+                                                WHERE fg.id=updates.id
+                                                """,
+                                                (object_id, tid, tid, qty, qty)
+                                            ),
+                                            (
+                                                """
                                                 INSERT INTO reklet.finished_goods_transactions
                                                     (object_item_id,object_id,operation_type,quantity)
                                                 SELECT id,object_id,'arrive',%s
                                                 FROM reklet.object_items
                                                 WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
-                                                LIMIT 1
+                                                ORDER BY id LIMIT 1
                                                 """,
                                                 (qty, object_id, tid, tid)
                                             ),
@@ -1804,30 +1923,71 @@ elif menu == "Объекты":
                                                 SELECT id,object_id,'arrive',%s
                                                 FROM reklet.object_items
                                                 WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
-                                                LIMIT 1
+                                                ORDER BY id LIMIT 1
                                                 """,
                                                 (qty, object_id, tid, tid)
                                             ),
                                         ])
 
-                                    elif from_stage == 3 and to_stage == 4:
-                                        statements.append((
-                                            """
-                                            INSERT INTO reklet.installation_transactions
-                                                (object_item_id,object_id,operation_type,quantity)
-                                            SELECT id,object_id,'complete',%s
-                                            FROM reklet.object_items
-                                            WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
-                                            LIMIT 1
-                                            """,
-                                            (qty, object_id, tid, tid)
-                                        ))
+                                    elif kind == "install":
+                                        statements.extend([
+                                            (
+                                                """
+                                                WITH arrived_rows AS (
+                                                    SELECT
+                                                        id,
+                                                        quantity,
+                                                        COALESCE(
+                                                            SUM(quantity) OVER (
+                                                                ORDER BY created_at,id
+                                                                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                                                            ), 0
+                                                        ) AS prev_quantity
+                                                    FROM reklet.finished_goods
+                                                    WHERE object_item_id=(
+                                                        SELECT id
+                                                        FROM reklet.object_items
+                                                        WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                        ORDER BY id LIMIT 1
+                                                    )
+                                                      AND status='arrived'
+                                                      AND quantity>0
+                                                ),
+                                                updates AS (
+                                                    SELECT
+                                                        id,
+                                                        GREATEST(
+                                                            quantity - GREATEST(LEAST(%s - prev_quantity, quantity),0),
+                                                            0
+                                                        ) AS new_quantity
+                                                    FROM arrived_rows
+                                                    WHERE prev_quantity < %s
+                                                )
+                                                UPDATE reklet.finished_goods fg
+                                                SET quantity=updates.new_quantity
+                                                FROM updates
+                                                WHERE fg.id=updates.id
+                                                """,
+                                                (object_id, tid, tid, qty, qty)
+                                            ),
+                                            (
+                                                """
+                                                INSERT INTO reklet.installation_transactions
+                                                    (object_item_id,object_id,operation_type,quantity)
+                                                SELECT id,object_id,'complete',%s
+                                                FROM reklet.object_items
+                                                WHERE object_id=%s AND (product_template_id=%s OR template_id=%s)
+                                                ORDER BY id LIMIT 1
+                                                """,
+                                                (qty, object_id, tid, tid)
+                                            ),
+                                        ])
 
                             try:
                                 run_transaction(statements)
-                                # Зелёные поля — разовые команды, а не сохранённые значения.
-                                # Очищаем состояние data_editor после успешного выполнения,
-                                # иначе Streamlit восстанавливает введённое число после rerun.
+                                # Green fields are one-time commands. Reset the editor
+                                # state after a successful transaction so the action
+                                # values return to zero after rerun.
                                 st.session_state.pop(f"object_management_editor_{object_id}", None)
                                 st.session_state.pop("object_management_pending", None)
                                 st.success("Изменения выполнены. Движения записаны по всем необходимым этапам.")
