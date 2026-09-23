@@ -861,6 +861,62 @@ st.markdown("""
     animation: none !important;
     transform: none !important;
 }
+
+/* ===== Управление объектами: визуальное разделение этапов ===== */
+.stage-guide {
+    margin: 0.35rem 0 0.85rem 0;
+    border: 1px solid rgba(120,140,165,.35);
+    border-radius: 4px;
+    overflow: hidden;
+    background: rgba(20,25,35,.18);
+}
+.stage-title {
+    padding: .55rem .8rem;
+    font-size: .86rem;
+    font-weight: 700;
+    letter-spacing: .03em;
+}
+.stage-groups {
+    display: grid;
+    grid-template-columns: 16% 12% 14% 21% 14% 23%;
+    min-height: 58px;
+}
+.stage-spacer, .stage-group {
+    padding: .55rem .45rem;
+    border-right: 1px solid rgba(100,120,145,.35);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+}
+.stage-spacer {
+    text-align: left;
+    font-weight: 600;
+    background: rgba(100,120,145,.10);
+}
+.stage-group b { font-size: .84rem; }
+.stage-group span { font-size: .70rem; opacity: .78; margin-top: .18rem; }
+.stage-order { background: rgba(80,120,190,.10); }
+.stage-production { background: rgba(80,160,220,.12); }
+.stage-warehouse { background: rgba(70,175,175,.11); }
+.stage-transport { background: rgba(210,170,70,.12); }
+.stage-installation { background: rgba(80,165,100,.12); border-right: 0; }
+.stage-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .7rem 1.1rem;
+    padding: .48rem .75rem;
+    border-top: 1px solid rgba(100,120,145,.30);
+    font-size: .74rem;
+}
+.legend-system { color: #2b75d6; }
+.legend-action { color: #218c45; }
+.legend-flow { opacity: .78; }
+
+/* Make the data editor feel like one continuous process table. */
+[data-testid="stDataEditor"] {
+    border-top: 2px solid rgba(100,120,145,.30);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1339,10 +1395,26 @@ elif menu == "Объекты":
                         "_qty_installed": qty_installed,
                     })
 
-                st.caption(
-                    "Синие ячейки — системные данные. Зелёные ячейки — действие. "
-                    "После «Выполнить» зелёные ячейки возвращаются к 0."
-                )
+                # Визуальная шапка этапов. Только HTML/CSS — без дополнительных
+                # запросов к БД и без тяжёлых компонентов.
+                st.markdown("""
+                <div class="stage-guide">
+                    <div class="stage-title">УПРАВЛЕНИЕ ДВИЖЕНИЕМ ИЗДЕЛИЯ</div>
+                    <div class="stage-groups">
+                        <div class="stage-spacer">Изделие</div>
+                        <div class="stage-group stage-order"><b>1. ЗАКАЗ</b><span>Сколько заказано</span></div>
+                        <div class="stage-group stage-production"><b>2. ПРОИЗВОДСТВО</b><span>Изготовление</span></div>
+                        <div class="stage-group stage-warehouse"><b>3. СКЛАД</b><span>Готовая продукция</span></div>
+                        <div class="stage-group stage-transport"><b>4. ТРАНСПОРТ</b><span>Отгрузка и доставка</span></div>
+                        <div class="stage-group stage-installation"><b>5. МОНТАЖ</b><span>Получение и установка</span></div>
+                    </div>
+                    <div class="stage-legend">
+                        <span class="legend-system"><b>СИСТЕМА</b> — синие значения рассчитываются автоматически</span>
+                        <span class="legend-action"><b>ДЕЙСТВИЕ</b> — зелёные значения вводятся вручную</span>
+                        <span class="legend-flow">Движение: Заказ → Производство → Склад → Транспорт → Монтаж</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
                 if not rows:
                     st.info("Для этого заказчика ещё не созданы изделия.")
@@ -1368,19 +1440,19 @@ elif menu == "Объекты":
                             column_config={
                                 "ID": st.column_config.NumberColumn("№", disabled=True),
                                 "Изделие": st.column_config.TextColumn("Этап / Параметр", disabled=True),
-                                "1.1 Всего": st.column_config.NumberColumn("Всего", disabled=True, format="%d"),
-                                "1.2 Коррекция": st.column_config.NumberColumn("Коррекция", min_value=-100000, step=1, format="%d"),
+                                "1.1 Всего": st.column_config.NumberColumn("Система: всего", disabled=True, format="%d"),
+                                "1.2 Коррекция": st.column_config.NumberColumn("Действие: коррекция", min_value=-100000, step=1, format="%d"),
                                 "2.1 Осталось": st.column_config.NumberColumn("Осталось", disabled=True, format="%d"),
-                                "2.2 Изготовлено": st.column_config.NumberColumn("Изготовлено", min_value=0, step=1, format="%d"),
+                                "2.2 Изготовлено": st.column_config.NumberColumn("Действие: изготовлено", min_value=0, step=1, format="%d"),
                                 "3.1 Ожидается": st.column_config.NumberColumn("Ожидается", disabled=True, format="%d"),
                                 "3.2 Прибыло": st.column_config.NumberColumn("Прибыло", disabled=True, format="%d"),
-                                "3.3 Отгружено": st.column_config.NumberColumn("Отгружено", min_value=0, step=1, format="%d"),
+                                "3.3 Отгружено": st.column_config.NumberColumn("Действие: отгружено", min_value=0, step=1, format="%d"),
                                 "3.4 Осталось": st.column_config.NumberColumn("Осталось", disabled=True, format="%d"),
                                 "4.1 В пути": st.column_config.NumberColumn("В пути", disabled=True, format="%d"),
-                                "4.2 Доставлен": st.column_config.NumberColumn("Доставлен", min_value=0, step=1, format="%d"),
+                                "4.2 Доставлен": st.column_config.NumberColumn("Действие: доставлен", min_value=0, step=1, format="%d"),
                                 "5.1 Получено": st.column_config.NumberColumn("Получено", disabled=True, format="%d"),
-                                "5.2 Установлено": st.column_config.NumberColumn("Установлено", min_value=0, step=1, format="%d"),
-                                "5.4 Всего установлено": st.column_config.NumberColumn("Всего", disabled=True, format="%d"),
+                                "5.2 Установлено": st.column_config.NumberColumn("Действие: установлено", min_value=0, step=1, format="%d"),
+                                "5.4 Всего установлено": st.column_config.NumberColumn("Всего установлено", disabled=True, format="%d"),
                             },
                             disabled=[
                                 "ID", "Изделие",
