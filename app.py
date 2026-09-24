@@ -1517,6 +1517,72 @@ elif menu == "Объекты":
                                     st.session_state.pop(pending_key, None)
                                     st.rerun()
 
+                            # ------------------------------------------------------------
+                            # БЕЗОПАСНОЕ УДАЛЕНИЕ ОБЪЕКТА
+                            # ------------------------------------------------------------
+                            st.markdown("---")
+                            st.subheader("Безопасное удаление объекта")
+                            st.warning(
+                                "Удаление необратимо. Объект можно удалить только если в системе нет "
+                                "изделий, готовой продукции и истории производства, отгрузки, доставки или монтажа."
+                            )
+                            delete_confirm = st.checkbox(
+                                "Я подтверждаю удаление выбранного объекта.",
+                                key=f"confirm_delete_object_{object_id}"
+                            )
+                            if st.button(
+                                "Удалить объект",
+                                key=f"delete_object_{object_id}",
+                                disabled=not delete_confirm,
+                                use_container_width=True
+                            ):
+                                refs = run_query(
+                                    """
+                                    SELECT
+                                        (SELECT COUNT(*) FROM reklet.object_items WHERE object_id=%s) AS object_items,
+                                        (SELECT COUNT(*) FROM reklet.production_transactions WHERE object_id=%s) AS production_transactions,
+                                        (SELECT COUNT(*) FROM reklet.finished_goods WHERE object_id=%s) AS finished_goods,
+                                        (SELECT COUNT(*) FROM reklet.finished_goods_transactions WHERE object_id=%s) AS finished_goods_transactions,
+                                        (SELECT COUNT(*) FROM reklet.transport_transactions WHERE object_id=%s) AS transport_transactions,
+                                        (SELECT COUNT(*) FROM reklet.installation_transactions WHERE object_id=%s) AS installation_transactions
+                                    """,
+                                    (object_id, object_id, object_id, object_id, object_id, object_id, object_id),
+                                    fetch=True
+                                ).iloc[0]
+
+                                ref_labels = {
+                                    "object_items": "изделия объекта",
+                                    "production_transactions": "история производства",
+                                    "finished_goods": "готовая продукция",
+                                    "finished_goods_transactions": "история движения готовой продукции",
+                                    "transport_transactions": "история транспортировки",
+                                    "installation_transactions": "история монтажа",
+                                    "material_transactions": "движения материалов по объекту",
+                                }
+                                blocking_refs = [
+                                    label
+                                    for key, label in ref_labels.items()
+                                    if int(refs.get(key, 0) or 0) > 0
+                                ]
+
+                                if blocking_refs:
+                                    st.error(
+                                        "Удаление запрещено. Связанные данные: "
+                                        + ", ".join(blocking_refs)
+                                        + "."
+                                    )
+                                else:
+                                    try:
+                                        run_query(
+                                            "DELETE FROM reklet.objects WHERE id=%s",
+                                            (object_id,)
+                                        )
+                                        st.success("Объект безопасно удалён.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error("Удаление не выполнено. База данных не изменилась.")
+                                        st.code(str(e))
+
     # ------------------------------------------------------------
     # ДОБАВИТЬ ИЗДЕЛИЯ НА ОБЪЕКТ
     # ------------------------------------------------------------
@@ -2347,6 +2413,81 @@ elif menu == "Объекты":
                             except Exception as e:
                                 st.error("Операция не выполнена. Транзакция отменена.")
                                 st.code(str(e))
+
+                # --------------------------------------------------------
+                # СТАТУСЫ ОБЪЕКТОВ
+                # --------------------------------------------------------
+                st.markdown("---")
+                st.subheader("Статус объектов")
+                status_filter = st.selectbox(
+                    "Отбор по статусу",
+                    ["Все объекты", "Согласован", "Запущен", "Завершен"],
+                    key="object_management_status_filter"
+                )
+
+                status_df = run_query(
+                    """
+                    WITH item_state AS (
+                        SELECT
+                            oi.object_id,
+                            COUNT(*) AS item_count,
+                            COALESCE(SUM(COALESCE(oi.quantity_needed, 0)), 0) AS ordered_qty,
+                            COALESCE(SUM(COALESCE(oi.qty_production, 0)), 0) AS production_qty,
+                            COALESCE(SUM(COALESCE(oi.qty_ready, 0)), 0) AS ready_qty,
+                            COALESCE(SUM(COALESCE(oi.qty_shipped, 0)), 0) AS shipped_qty,
+                            COALESCE(SUM(COALESCE(oi.qty_arrived, 0)), 0) AS arrived_qty,
+                            COALESCE(SUM(COALESCE(oi.qty_installing, 0)), 0) AS installing_qty,
+                            COALESCE(SUM(COALESCE(oi.qty_installed, 0)), 0) AS installed_qty
+                        FROM reklet.object_items oi
+                        GROUP BY oi.object_id
+                    ),
+                    production_history AS (
+                        SELECT DISTINCT object_id
+                        FROM reklet.production_transactions
+                        WHERE object_id IS NOT NULL
+                    )
+                    SELECT
+                        o.id,
+                        o.object_name,
+                        CASE
+                            WHEN s.item_count IS NULL OR s.item_count = 0 THEN NULL
+                            WHEN s.ordered_qty > 0 AND s.installed_qty >= s.ordered_qty THEN 'Завершен'
+                            WHEN p.object_id IS NOT NULL
+                                 OR s.production_qty > 0
+                                 OR s.ready_qty > 0
+                                 OR s.shipped_qty > 0
+                                 OR s.arrived_qty > 0
+                                 OR s.installing_qty > 0
+                                 OR s.installed_qty > 0
+                                THEN 'Запущен'
+                            ELSE 'Согласован'
+                        END AS status
+                    FROM reklet.objects o
+                    LEFT JOIN item_state s ON s.object_id = o.id
+                    LEFT JOIN production_history p ON p.object_id = o.id
+                    WHERE s.item_count IS NOT NULL AND s.item_count > 0
+                    ORDER BY o.object_name
+                    """,
+                    fetch=True
+                )
+
+                if status_df.empty:
+                    st.info("Нет объектов с добавленными изделиями.")
+                else:
+                    if status_filter != "Все объекты":
+                        status_df = status_df[status_df["status"] == status_filter].copy()
+
+                    status_view = status_df[["object_name", "status"]].copy()
+                    status_view.columns = ["Название Объекта", "Статус"]
+
+                    if status_view.empty:
+                        st.info("Объектов с выбранным статусом нет.")
+                    else:
+                        st.dataframe(
+                            status_view,
+                            width="stretch",
+                            hide_index=True
+                        )
 
     # ------------------------------------------------------------
     # СОСТАВ ОБЪЕКТА — ТОЛЬКО ПРОСМОТР
