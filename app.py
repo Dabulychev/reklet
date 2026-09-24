@@ -1518,70 +1518,70 @@ elif menu == "Объекты":
                                     st.rerun()
 
                             # ------------------------------------------------------------
-                            # БЕЗОПАСНОЕ УДАЛЕНИЕ ОБЪЕКТА
+                            # БЕЗОПАСНОЕ УДАЛЕНИЕ ОБЪЕКТА — ОТДЕЛЬНОЕ РАСКРЫВАЮЩЕЕСЯ ОКНО
                             # ------------------------------------------------------------
-                            st.markdown("---")
-                            st.subheader("Безопасное удаление объекта")
-                            st.warning(
-                                "Удаление необратимо. Объект можно удалить только если в системе нет "
-                                "изделий, готовой продукции и истории производства, отгрузки, доставки или монтажа."
-                            )
-                            delete_confirm = st.checkbox(
-                                "Я подтверждаю удаление выбранного объекта.",
-                                key=f"confirm_delete_object_{object_id}"
-                            )
-                            if st.button(
-                                "Удалить объект",
-                                key=f"delete_object_{object_id}",
-                                disabled=not delete_confirm,
-                                use_container_width=True
-                            ):
-                                refs = run_query(
-                                    """
-                                    SELECT
-                                        (SELECT COUNT(*) FROM reklet.object_items WHERE object_id=%s) AS object_items,
-                                        (SELECT COUNT(*) FROM reklet.production_transactions WHERE object_id=%s) AS production_transactions,
-                                        (SELECT COUNT(*) FROM reklet.finished_goods WHERE object_id=%s) AS finished_goods,
-                                        (SELECT COUNT(*) FROM reklet.finished_goods_transactions WHERE object_id=%s) AS finished_goods_transactions,
-                                        (SELECT COUNT(*) FROM reklet.transport_transactions WHERE object_id=%s) AS transport_transactions,
-                                        (SELECT COUNT(*) FROM reklet.installation_transactions WHERE object_id=%s) AS installation_transactions
-                                    """,
-                                    (object_id, object_id, object_id, object_id, object_id, object_id, object_id),
-                                    fetch=True
-                                ).iloc[0]
+                            with st.expander("Безопасное удаление объекта"):
+                                st.warning(
+                                    "Удаление необратимо. Объект можно удалить только если в системе нет "
+                                    "изделий, готовой продукции и истории производства, отгрузки, доставки, материалов или монтажа."
+                                )
+                                delete_confirm = st.checkbox(
+                                    "Я подтверждаю удаление выбранного объекта.",
+                                    key=f"confirm_delete_object_{object_id}"
+                                )
+                                if st.button(
+                                    "Удалить объект",
+                                    key=f"delete_object_{object_id}",
+                                    disabled=not delete_confirm,
+                                    use_container_width=True
+                                ):
+                                    refs = run_query(
+                                        """
+                                        SELECT
+                                            (SELECT COUNT(*) FROM reklet.object_items WHERE object_id=%s) AS object_items,
+                                            (SELECT COUNT(*) FROM reklet.production_transactions WHERE object_id=%s) AS production_transactions,
+                                            (SELECT COUNT(*) FROM reklet.finished_goods WHERE object_id=%s) AS finished_goods,
+                                            (SELECT COUNT(*) FROM reklet.finished_goods_transactions WHERE object_id=%s) AS finished_goods_transactions,
+                                            (SELECT COUNT(*) FROM reklet.transport_transactions WHERE object_id=%s) AS transport_transactions,
+                                            (SELECT COUNT(*) FROM reklet.installation_transactions WHERE object_id=%s) AS installation_transactions,
+                                            (SELECT COUNT(*) FROM reklet.material_transactions WHERE object_id=%s) AS material_transactions
+                                        """,
+                                        (object_id, object_id, object_id, object_id, object_id, object_id, object_id),
+                                        fetch=True
+                                    ).iloc[0]
 
-                                ref_labels = {
-                                    "object_items": "изделия объекта",
-                                    "production_transactions": "история производства",
-                                    "finished_goods": "готовая продукция",
-                                    "finished_goods_transactions": "история движения готовой продукции",
-                                    "transport_transactions": "история транспортировки",
-                                    "installation_transactions": "история монтажа",
-                                    "material_transactions": "движения материалов по объекту",
-                                }
-                                blocking_refs = [
-                                    label
-                                    for key, label in ref_labels.items()
-                                    if int(refs.get(key, 0) or 0) > 0
-                                ]
+                                    ref_labels = {
+                                        "object_items": "изделия объекта",
+                                        "production_transactions": "история производства",
+                                        "finished_goods": "готовая продукция",
+                                        "finished_goods_transactions": "история движения готовой продукции",
+                                        "transport_transactions": "история транспортировки",
+                                        "installation_transactions": "история монтажа",
+                                        "material_transactions": "движения материалов по объекту",
+                                    }
+                                    blocking_refs = [
+                                        label
+                                        for key, label in ref_labels.items()
+                                        if int(refs.get(key, 0) or 0) > 0
+                                    ]
 
-                                if blocking_refs:
-                                    st.error(
-                                        "Удаление запрещено. Связанные данные: "
-                                        + ", ".join(blocking_refs)
-                                        + "."
-                                    )
-                                else:
-                                    try:
-                                        run_query(
-                                            "DELETE FROM reklet.objects WHERE id=%s",
-                                            (object_id,)
+                                    if blocking_refs:
+                                        st.error(
+                                            "Удаление запрещено. Связанные данные: "
+                                            + ", ".join(blocking_refs)
+                                            + "."
                                         )
-                                        st.success("Объект безопасно удалён.")
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error("Удаление не выполнено. База данных не изменилась.")
-                                        st.code(str(e))
+                                    else:
+                                        try:
+                                            run_query(
+                                                "DELETE FROM reklet.objects WHERE id=%s",
+                                                (object_id,)
+                                            )
+                                            st.success("Объект безопасно удалён.")
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error("Удаление не выполнено. База данных не изменилась.")
+                                            st.code(str(e))
 
     # ------------------------------------------------------------
     # ДОБАВИТЬ ИЗДЕЛИЯ НА ОБЪЕКТ
