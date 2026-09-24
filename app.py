@@ -491,6 +491,22 @@ def ensure_material_planning_tables():
             CONSTRAINT material_consumption_positive_check CHECK (quantity > 0)
         )
         """,
+        """
+        CREATE TABLE IF NOT EXISTS reklet.object_item_material_costs (
+            id serial4 PRIMARY KEY,
+            object_item_id int4 NOT NULL REFERENCES reklet.object_items(id) ON DELETE CASCADE,
+            material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
+            quantity_per_unit numeric NOT NULL,
+            waste_coefficient numeric NOT NULL,
+            unit_cost numeric NOT NULL,
+            created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+            CONSTRAINT object_item_material_costs_unique UNIQUE (object_item_id, material_id),
+            CONSTRAINT object_item_material_costs_quantity_check CHECK (quantity_per_unit >= 0),
+            CONSTRAINT object_item_material_costs_waste_check CHECK (waste_coefficient >= 0),
+            CONSTRAINT object_item_material_costs_cost_check CHECK (unit_cost >= 0)
+        )
+        """,
+        "ALTER TABLE reklet.material_consumption ADD COLUMN IF NOT EXISTS unit_cost_snapshot numeric NULL",
         "CREATE INDEX IF NOT EXISTS idx_material_reservations_object ON reklet.material_reservations(object_id)",
         "CREATE INDEX IF NOT EXISTS idx_material_reservations_material ON reklet.material_reservations(material_id)",
         "CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON reklet.purchase_orders(supplier_id)",
@@ -498,7 +514,25 @@ def ensure_material_planning_tables():
         "CREATE INDEX IF NOT EXISTS idx_purchase_order_items_object_material ON reklet.purchase_order_items(object_id, material_id)",
         "CREATE INDEX IF NOT EXISTS idx_material_consumption_object ON reklet.material_consumption(object_id)",
         "CREATE INDEX IF NOT EXISTS idx_material_consumption_item ON reklet.material_consumption(object_item_id)",
-        "CREATE INDEX IF NOT EXISTS idx_material_consumption_material ON reklet.material_consumption(material_id)"
+        "CREATE INDEX IF NOT EXISTS idx_material_consumption_material ON reklet.material_consumption(material_id)",
+        "CREATE INDEX IF NOT EXISTS idx_object_item_material_costs_item ON reklet.object_item_material_costs(object_item_id)",
+        "CREATE INDEX IF NOT EXISTS idx_object_item_material_costs_material ON reklet.object_item_material_costs(material_id)",
+        """
+        INSERT INTO reklet.object_item_material_costs
+            (object_item_id, material_id, quantity_per_unit, waste_coefficient, unit_cost)
+        SELECT
+            oi.id,
+            ptm.material_id,
+            COALESCE(ptm.quantity_per_unit, 0),
+            COALESCE(ptm.waste_coefficient, m.default_waste_coefficient, 1),
+            COALESCE(m.cost_per_unit, 0)
+        FROM reklet.object_items oi
+        JOIN reklet.product_template_materials ptm
+          ON ptm.product_template_id = COALESCE(oi.product_template_id, oi.template_id)
+        JOIN reklet.materials m
+          ON m.id = ptm.material_id
+        ON CONFLICT (object_item_id, material_id) DO NOTHING
+        """
     ]
 
     try:
@@ -991,11 +1025,14 @@ def get_object_material_planning(object_id):
         WITH demand AS (
             SELECT ptm.material_id,
                    SUM(COALESCE(oi.quantity_needed,0)
-                       * COALESCE(ptm.quantity_per_unit,0)
-                       * COALESCE(ptm.waste_coefficient,1)) AS required_quantity
+                       * COALESCE(oimc.quantity_per_unit, ptm.quantity_per_unit,0)
+                       * COALESCE(oimc.waste_coefficient, ptm.waste_coefficient,1)) AS required_quantity
             FROM reklet.object_items oi
             JOIN reklet.product_template_materials ptm
               ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
+            LEFT JOIN reklet.object_item_material_costs oimc
+              ON oimc.object_item_id=oi.id
+             AND oimc.material_id=ptm.material_id
             WHERE oi.object_id=%s
             GROUP BY ptm.material_id
         ),
@@ -2050,6 +2087,25 @@ elif menu == "Объекты":
                                     object_id, template_id, template_id
                                 )
                             ))
+                            statements.append((
+                                """
+                                INSERT INTO reklet.object_item_material_costs
+                                    (object_item_id, material_id, quantity_per_unit, waste_coefficient, unit_cost)
+                                SELECT oi.id,
+                                       ptm.material_id,
+                                       COALESCE(ptm.quantity_per_unit,0),
+                                       COALESCE(ptm.waste_coefficient,m.default_waste_coefficient,1),
+                                       COALESCE(m.cost_per_unit,0)
+                                FROM reklet.object_items oi
+                                JOIN reklet.product_template_materials ptm
+                                  ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
+                                JOIN reklet.materials m ON m.id=ptm.material_id
+                                WHERE oi.object_id=%s
+                                  AND (oi.product_template_id=%s OR oi.template_id=%s)
+                                ON CONFLICT (object_item_id,material_id) DO NOTHING
+                                """,
+                                (object_id, template_id, template_id)
+                            ))
 
                         try:
                             run_transaction(statements)
@@ -2514,6 +2570,25 @@ elif menu == "Объекты":
                                         object_id, tid, tid
                                     )
                                 ))
+                                statements.append((
+                                    """
+                                    INSERT INTO reklet.object_item_material_costs
+                                        (object_item_id, material_id, quantity_per_unit, waste_coefficient, unit_cost)
+                                    SELECT oi.id,
+                                           ptm.material_id,
+                                           COALESCE(ptm.quantity_per_unit,0),
+                                           COALESCE(ptm.waste_coefficient,m.default_waste_coefficient,1),
+                                           COALESCE(m.cost_per_unit,0)
+                                    FROM reklet.object_items oi
+                                    JOIN reklet.product_template_materials ptm
+                                      ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
+                                    JOIN reklet.materials m ON m.id=ptm.material_id
+                                    WHERE oi.object_id=%s
+                                      AND (oi.product_template_id=%s OR oi.template_id=%s)
+                                    ON CONFLICT (object_item_id,material_id) DO NOTHING
+                                    """,
+                                    (object_id, tid, tid)
+                                ))
 
                                 production_completed = (
                                     new["ready"] + new["shipped"] + new["arrived"] +
@@ -2926,9 +3001,9 @@ elif menu == "Объекты":
                         ptm.material_id,
                         m.name AS material_name,
                         u.name AS unit_name,
-                        ptm.quantity_per_unit,
-                        COALESCE(ptm.waste_coefficient, m.default_waste_coefficient, 1) AS waste_coefficient,
-                        m.cost_per_unit,
+                        COALESCE(oimc.quantity_per_unit, ptm.quantity_per_unit) AS quantity_per_unit,
+                        COALESCE(oimc.waste_coefficient, ptm.waste_coefficient, m.default_waste_coefficient, 1) AS waste_coefficient,
+                        COALESCE(oimc.unit_cost, m.cost_per_unit, 0) AS cost_per_unit,
                         m.stock_quantity
                     FROM reklet.object_items oi
                     JOIN reklet.product_templates pt
@@ -2936,6 +3011,9 @@ elif menu == "Объекты":
                     JOIN reklet.product_template_materials ptm
                       ON ptm.product_template_id = pt.id
                     JOIN reklet.materials m ON m.id = ptm.material_id
+                    LEFT JOIN reklet.object_item_material_costs oimc
+                      ON oimc.object_item_id=oi.id
+                     AND oimc.material_id=ptm.material_id
                     LEFT JOIN reklet.units u ON u.id = m.unit_id
                     WHERE oi.object_id = %s
                     ORDER BY oi.item_name, m.name
@@ -3032,7 +3110,7 @@ elif menu == "Изделия":
                .loc[lambda x: x != ""].unique().tolist())
         if not templates_all.empty else []
     )
-    if product_sub != "Добавить изделие":
+    if product_sub not in ("Добавить изделие", "Категории изделий"):
         selected_client = st.selectbox(
             "Отбор по заказчику-изделию", client_options,
             key=f"product_filter_{product_sub}"
@@ -3097,66 +3175,140 @@ elif menu == "Изделия":
             categories = pd.DataFrame(columns=["id","name"])
             st.error("Не удалось открыть категории изделий.")
             st.code(str(e))
-        action = st.radio(
-            "Действие",
-            ["Создать категорию","Корректировать категорию","Удалить категорию"],
-            horizontal=True,key="product_category_action"
-        )
-        if action == "Создать категорию":
-            with st.form("create_product_category"):
-                name = st.text_input("Название категории")
-                if st.form_submit_button("Создать категорию"):
-                    if not name.strip():
-                        st.warning("Название не может быть пустым.")
+
+        # ----------------------------------------------------
+        # ПЕРЕЧЕНЬ КАТЕГОРИЙ
+        # ----------------------------------------------------
+        st.markdown("### Перечень категорий")
+        if categories.empty:
+            st.info("Категорий изделий нет.")
+        else:
+            category_list = categories[["id", "name"]].copy()
+            category_list.insert(0, "Nп/п", range(1, len(category_list) + 1))
+            category_list.columns = ["Nп/п", "ID", "Категория"]
+            st.dataframe(category_list, width="stretch", hide_index=True)
+            render_print_html("Перечень категорий изделий", category_list, "print_product_categories")
+
+        # ----------------------------------------------------
+        # КОРРЕКТИРОВКА КАТЕГОРИИ
+        # ----------------------------------------------------
+        st.markdown("### Корректировка категории")
+        if categories.empty:
+            st.info("Нет категорий для корректировки.")
+        else:
+            category_map = {
+                f"{int(row['id'])} — {str(row['name']).strip()}": int(row['id'])
+                for _, row in categories.iterrows()
+            }
+            selected_label = st.selectbox(
+                "Категория",
+                ["— Выберите категорию —"] + list(category_map.keys()),
+                index=0,
+                key="product_category_edit_filter"
+            )
+
+            if selected_label != "— Выберите категорию —":
+                category_id = category_map[selected_label]
+                old_name = str(
+                    categories[categories["id"] == category_id].iloc[0]["name"]
+                ).strip()
+                pending_key = f"product_category_edit_pending_{category_id}"
+
+                with st.form(f"product_category_edit_form_{category_id}", clear_on_submit=False):
+                    new_name = st.text_input("Новое название", value=old_name)
+                    execute_category_changes = st.form_submit_button(
+                        "Выполнить", use_container_width=True
+                    )
+
+                if execute_category_changes:
+                    new_name_clean = new_name.strip()
+                    if not new_name_clean:
+                        st.error("Название категории не может быть пустым.")
+                    elif new_name_clean == old_name:
+                        st.info("Изменений нет.")
                     else:
+                        st.session_state[pending_key] = {
+                            "category_id": category_id,
+                            "old_name": old_name,
+                            "new_name": new_name_clean,
+                        }
+
+                pending = st.session_state.get(pending_key)
+                if pending:
+                    st.markdown("#### Подтверждение изменений")
+                    confirmation = pd.DataFrame([{
+                        "Поле": "Категория",
+                        "Было": pending["old_name"],
+                        "Станет": pending["new_name"],
+                    }])
+                    st.dataframe(confirmation, width="stretch", hide_index=True)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        confirm_category_changes = st.button(
+                            "Подтвердить",
+                            key=f"confirm_product_category_edit_{category_id}",
+                            type="primary",
+                            use_container_width=True,
+                        )
+                    with c2:
+                        cancel_category_changes = st.button(
+                            "Отмена",
+                            key=f"cancel_product_category_edit_{category_id}",
+                            use_container_width=True,
+                        )
+
+                    if cancel_category_changes:
+                        st.session_state.pop(pending_key, None)
+                        st.rerun()
+
+                    if confirm_category_changes:
                         try:
-                            run_query("INSERT INTO reklet.product_categories (name) VALUES (%s)",(name.strip(),))
-                            st.success("Категория изделия создана.")
+                            run_transaction([
+                                (
+                                    "UPDATE reklet.product_categories SET name=%s WHERE id=%s",
+                                    (pending["new_name"], pending["category_id"])
+                                ),
+                                (
+                                    "UPDATE reklet.product_templates SET category=%s WHERE category=%s",
+                                    (pending["new_name"], pending["old_name"])
+                                )
+                            ])
+                            st.session_state.pop(pending_key, None)
+                            st.success("Категория изменена.")
                             st.rerun()
                         except Exception as e:
-                            st.error("Не удалось создать категорию. Возможно, она уже существует.")
+                            st.error("Не удалось изменить категорию.")
                             st.code(str(e))
-        elif action == "Корректировать категорию":
-            if categories.empty:
-                st.info("Категорий изделий нет.")
-            else:
-                cmap={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in categories.iterrows()}
-                label=st.selectbox("Категория",list(cmap.keys()),key="edit_product_category")
-                cid=cmap[label]
-                old_name=str(categories[categories["id"]==cid].iloc[0]["name"])
-                with st.form("edit_product_category_form"):
-                    new_name=st.text_input("Новое название",value=old_name)
-                    if st.form_submit_button("Сохранить категорию"):
-                        if not new_name.strip():
-                            st.warning("Название не может быть пустым.")
-                        else:
-                            try:
-                                run_transaction([
-                                    ("UPDATE reklet.product_categories SET name=%s WHERE id=%s",(new_name.strip(),cid)),
-                                    ("UPDATE reklet.product_templates SET category=%s WHERE category=%s",(new_name.strip(),old_name))
-                                ])
-                                st.success("Категория изменена.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error("Не удалось изменить категорию.")
-                                st.code(str(e))
-        else:
-            if categories.empty:
-                st.info("Категорий изделий нет.")
-            else:
-                cmap={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in categories.iterrows()}
-                label=st.selectbox("Категория",list(cmap.keys()),key="delete_product_category")
-                cid=cmap[label]
-                cat_name=str(categories[categories["id"]==cid].iloc[0]["name"])
-                with st.expander("Удаление категории",expanded=False):
-                    st.warning("Категория не будет удалена, если она используется изделиями.")
-                    confirm=st.checkbox("Я подтверждаю удаление категории.",key="confirm_delete_product_category")
-                    if st.button("Удалить категорию",key="delete_product_category",disabled=not confirm):
-                        used=run_query("SELECT COUNT(*) AS cnt FROM reklet.product_templates WHERE category=%s",(cat_name,),fetch=True)
-                        if int(used.iloc[0]["cnt"])>0:
+
+                # ------------------------------------------------
+                # БЕЗОПАСНОЕ УДАЛЕНИЕ
+                # ------------------------------------------------
+                st.markdown("### Безопасное удаление категории")
+                with st.expander("Безопасное удаление категории", expanded=False):
+                    st.warning(
+                        "Удаление категории необратимо. Категория, используемая изделиями, "
+                        "не может быть удалена."
+                    )
+                    confirm_delete_category = st.checkbox(
+                        "Я подтверждаю удаление выбранной категории.",
+                        key=f"confirm_delete_product_category_{category_id}"
+                    )
+                    if st.button(
+                        "Удалить категорию",
+                        key=f"delete_product_category_{category_id}",
+                        disabled=not confirm_delete_category,
+                    ):
+                        used = run_query(
+                            "SELECT COUNT(*) AS cnt FROM reklet.product_templates WHERE category=%s",
+                            (old_name,), fetch=True
+                        )
+                        if int(used.iloc[0]["cnt"]) > 0:
                             st.error("Удаление невозможно: категория используется изделиями.")
                         else:
-                            run_query("DELETE FROM reklet.product_categories WHERE id=%s",(cid,))
+                            run_query(
+                                "DELETE FROM reklet.product_categories WHERE id=%s",
+                                (category_id,)
+                            )
                             st.success("Категория удалена.")
                             st.rerun()
 
@@ -3633,7 +3785,7 @@ elif menu == "Склад материалов":
 
     elif active_material_section=="movement":
         st.subheader("Движение материалов")
-        movements=run_query("""SELECT * FROM (SELECT mt.created_at AS tx_date,CASE mt.operation_type WHEN 'purchase' THEN 'Приход материала' WHEN 'production_transfer' THEN 'Выдано в производство' ELSE mt.operation_type END AS operation_name,c.name AS client_name,o.object_name,NULL::text AS product_name,m.name AS material_name,s.name AS supplier_name,mt.quantity::numeric AS quantity,mt.unit_price::numeric AS unit_price FROM reklet.material_transactions mt LEFT JOIN reklet.materials m ON m.id=mt.material_id LEFT JOIN reklet.suppliers s ON s.id=mt.supplier_id LEFT JOIN reklet.objects o ON o.id=mt.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id UNION ALL SELECT mc.created_at AS tx_date,'Списано при производстве'::text AS operation_name,c.name AS client_name,o.object_name,oi.item_name AS product_name,m.name AS material_name,NULL::text AS supplier_name,mc.quantity::numeric AS quantity,NULL::numeric AS unit_price FROM reklet.material_consumption mc LEFT JOIN reklet.objects o ON o.id=mc.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id LEFT JOIN reklet.object_items oi ON oi.id=mc.object_item_id LEFT JOIN reklet.materials m ON m.id=mc.material_id) x ORDER BY tx_date DESC LIMIT 500""",fetch=True)
+        movements=run_query("""SELECT * FROM (SELECT mt.created_at AS tx_date,CASE mt.operation_type WHEN 'purchase' THEN 'Приход материала' WHEN 'production_transfer' THEN 'Выдано в производство' ELSE mt.operation_type END AS operation_name,c.name AS client_name,o.object_name,NULL::text AS product_name,m.name AS material_name,s.name AS supplier_name,mt.quantity::numeric AS quantity,mt.unit_price::numeric AS unit_price FROM reklet.material_transactions mt LEFT JOIN reklet.materials m ON m.id=mt.material_id LEFT JOIN reklet.suppliers s ON s.id=mt.supplier_id LEFT JOIN reklet.objects o ON o.id=mt.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id UNION ALL SELECT mc.created_at AS tx_date,'Списано при производстве'::text AS operation_name,c.name AS client_name,o.object_name,oi.item_name AS product_name,m.name AS material_name,NULL::text AS supplier_name,mc.quantity::numeric AS quantity,mc.unit_cost_snapshot::numeric AS unit_price FROM reklet.material_consumption mc LEFT JOIN reklet.objects o ON o.id=mc.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id LEFT JOIN reklet.object_items oi ON oi.id=mc.object_item_id LEFT JOIN reklet.materials m ON m.id=mc.material_id) x ORDER BY tx_date DESC LIMIT 500""",fetch=True)
         if movements.empty: st.info("Движений материалов пока нет.")
         else:
             view=movements.rename(columns={"tx_date":"Дата","operation_name":"Операция","client_name":"Заказчик","object_name":"Объект","product_name":"Изделие","material_name":"Материал","supplier_name":"Поставщик","quantity":"Количество","unit_price":"Цена"})[["Дата","Операция","Заказчик","Объект","Изделие","Материал","Поставщик","Количество","Цена"]]; st.dataframe(view,width="stretch",hide_index=True); render_print_html("Движение материалов",view,"print_material_movements")
@@ -3958,12 +4110,16 @@ elif menu == "Производство":
             production_material_requirements = run_query(
                 """
                 SELECT oi.id AS object_item_id, ptm.material_id,
-                       SUM(COALESCE(ptm.quantity_per_unit,0)*COALESCE(ptm.waste_coefficient,m.default_waste_coefficient,1)) AS material_per_product
+                       SUM(COALESCE(oimc.quantity_per_unit,ptm.quantity_per_unit,0)
+                           * COALESCE(oimc.waste_coefficient,ptm.waste_coefficient,m.default_waste_coefficient,1)) AS material_per_product
                 FROM reklet.object_items oi
                 JOIN reklet.product_template_materials ptm
                   ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
                 JOIN reklet.materials m
                   ON m.id=ptm.material_id
+                LEFT JOIN reklet.object_item_material_costs oimc
+                  ON oimc.object_item_id=oi.id
+                 AND oimc.material_id=ptm.material_id
                 WHERE oi.object_id=%s
                 GROUP BY oi.id,ptm.material_id
                 """,
@@ -4102,7 +4258,20 @@ elif menu == "Производство":
                         errors.append(f"{name}: для нового производства нужно {required_qty:.4f}, а в производстве доступно только {max(available_wip,0):.4f}. Сначала выдайте материал в производство.")
                 if not errors:
                     for item_id,material_id,qty_material in consumption_plan:
-                        statements.append(("INSERT INTO reklet.material_consumption(object_item_id,object_id,material_id,quantity) VALUES (%s,%s,%s,%s)",(item_id,object_id,material_id,qty_material)))
+                        statements.append((
+                        """
+                        INSERT INTO reklet.material_consumption
+                            (object_item_id,object_id,material_id,quantity,unit_cost_snapshot)
+                        SELECT %s,%s,%s,%s,
+                               COALESCE(oimc.unit_cost,m.cost_per_unit,0)
+                        FROM reklet.materials m
+                        LEFT JOIN reklet.object_item_material_costs oimc
+                          ON oimc.object_item_id=%s
+                         AND oimc.material_id=%s
+                        WHERE m.id=%s
+                        """,
+                        (item_id,object_id,material_id,qty_material,item_id,material_id,material_id)
+                    ))
 
                 if errors:
                     st.error("Операция не выполнена:\n" + "\n".join(errors))
@@ -4400,9 +4569,9 @@ elif menu == "Зарплата":
             COALESCE(oi.quantity_needed, 0) AS quantity_needed,
             COALESCE(o.transport_distance_km, 0) AS distance_km,
             COALESCE(SUM(
-                ptm.quantity_per_unit *
-                COALESCE(ptm.waste_coefficient, m.default_waste_coefficient, 1) *
-                COALESCE(m.cost_per_unit, 0)
+                COALESCE(oimc.quantity_per_unit, ptm.quantity_per_unit) *
+                COALESCE(oimc.waste_coefficient, ptm.waste_coefficient, m.default_waste_coefficient, 1) *
+                COALESCE(oimc.unit_cost, m.cost_per_unit, 0)
             ), 0) AS material_cost_per_unit
         FROM reklet.object_items oi
         JOIN reklet.objects o ON o.id = oi.object_id
@@ -4413,6 +4582,9 @@ elif menu == "Зарплата":
             ON ptm.product_template_id = pt.id
         LEFT JOIN reklet.materials m
             ON m.id = ptm.material_id
+        LEFT JOIN reklet.object_item_material_costs oimc
+            ON oimc.object_item_id = oi.id
+           AND oimc.material_id = ptm.material_id
         WHERE oi.object_id = %s
         GROUP BY
             oi.id, oi.object_id, o.object_name, c.name, oi.item_name,
@@ -4653,16 +4825,19 @@ elif menu == "Отчёты":
         ) AS qty_shipped,
         COALESCE(oi.qty_ready, 0) AS qty_ready,
         COALESCE(SUM(
-            ptm.quantity_per_unit
-            * m.cost_per_unit
-            * COALESCE(ptm.waste_coefficient, 1)
+            COALESCE(oimc.quantity_per_unit, ptm.quantity_per_unit, 0)
+            * COALESCE(oimc.unit_cost, m.cost_per_unit, 0)
+            * COALESCE(oimc.waste_coefficient, ptm.waste_coefficient, m.default_waste_coefficient, 1)
         ), 0) AS material_unit_cost
     FROM reklet.object_items oi
     JOIN reklet.objects o ON o.id = oi.object_id
     LEFT JOIN reklet.clients c ON c.id = o.client_id
     LEFT JOIN reklet.product_template_materials ptm
-        ON ptm.product_template_id = oi.product_template_id
+        ON ptm.product_template_id = COALESCE(oi.product_template_id, oi.template_id)
     LEFT JOIN reklet.materials m ON m.id = ptm.material_id
+    LEFT JOIN reklet.object_item_material_costs oimc
+        ON oimc.object_item_id = oi.id
+       AND oimc.material_id = ptm.material_id
     GROUP BY
         o.id, o.object_name, c.name, o.address,
         o.transport_distance_km,
@@ -5267,13 +5442,18 @@ elif menu == "Отчёты":
             need = run_query("""
                 SELECT o.object_name, c.name AS client_name, oi.item_name,
                        m.name AS material,
-                       (oi.quantity_needed * ptm.quantity_per_unit * COALESCE(ptm.waste_coefficient,1)) AS required_quantity,
+                       (oi.quantity_needed
+                         * COALESCE(oimc.quantity_per_unit,ptm.quantity_per_unit,0)
+                         * COALESCE(oimc.waste_coefficient,ptm.waste_coefficient,m.default_waste_coefficient,1)) AS required_quantity,
                        COALESCE(m.stock_quantity,0) AS stock_quantity
                 FROM reklet.object_items oi
                 JOIN reklet.objects o ON o.id=oi.object_id
                 LEFT JOIN reklet.clients c ON c.id=o.client_id
                 JOIN reklet.product_template_materials ptm ON ptm.product_template_id=oi.product_template_id
                 JOIN reklet.materials m ON m.id=ptm.material_id
+                LEFT JOIN reklet.object_item_material_costs oimc
+                  ON oimc.object_item_id=oi.id
+                 AND oimc.material_id=ptm.material_id
                 WHERE COALESCE(oi.qty_installed,0) < COALESCE(oi.quantity_needed,0)
                 ORDER BY o.object_name, oi.item_name, m.name
             """, fetch=True)
@@ -5347,16 +5527,19 @@ elif menu == "Отчёты":
         ) AS qty_shipped,
         COALESCE(oi.qty_ready, 0) AS qty_ready,
         COALESCE(SUM(
-            ptm.quantity_per_unit
-            * m.cost_per_unit
-            * COALESCE(ptm.waste_coefficient, 1)
+            COALESCE(oimc.quantity_per_unit, ptm.quantity_per_unit, 0)
+            * COALESCE(oimc.unit_cost, m.cost_per_unit, 0)
+            * COALESCE(oimc.waste_coefficient, ptm.waste_coefficient, m.default_waste_coefficient, 1)
         ), 0) AS material_unit_cost
     FROM reklet.object_items oi
     JOIN reklet.objects o ON o.id = oi.object_id
     LEFT JOIN reklet.clients c ON c.id = o.client_id
     LEFT JOIN reklet.product_template_materials ptm
-        ON ptm.product_template_id = oi.product_template_id
+        ON ptm.product_template_id = COALESCE(oi.product_template_id, oi.template_id)
     LEFT JOIN reklet.materials m ON m.id = ptm.material_id
+    LEFT JOIN reklet.object_item_material_costs oimc
+        ON oimc.object_item_id = oi.id
+       AND oimc.material_id = ptm.material_id
     GROUP BY
         o.id, o.object_name, c.name, o.address,
         o.transport_distance_km,
@@ -5657,13 +5840,18 @@ elif menu == "Отчёты":
             need = run_query("""
                 SELECT o.object_name, c.name AS client_name, oi.item_name,
                        m.name AS material,
-                       (oi.quantity_needed * ptm.quantity_per_unit * COALESCE(ptm.waste_coefficient,1)) AS required_quantity,
+                       (oi.quantity_needed
+                         * COALESCE(oimc.quantity_per_unit,ptm.quantity_per_unit,0)
+                         * COALESCE(oimc.waste_coefficient,ptm.waste_coefficient,m.default_waste_coefficient,1)) AS required_quantity,
                        COALESCE(m.stock_quantity,0) AS stock_quantity
                 FROM reklet.object_items oi
                 JOIN reklet.objects o ON o.id=oi.object_id
                 LEFT JOIN reklet.clients c ON c.id=o.client_id
                 JOIN reklet.product_template_materials ptm ON ptm.product_template_id=oi.product_template_id
                 JOIN reklet.materials m ON m.id=ptm.material_id
+                LEFT JOIN reklet.object_item_material_costs oimc
+                  ON oimc.object_item_id=oi.id
+                 AND oimc.material_id=ptm.material_id
                 WHERE COALESCE(oi.qty_installed,0) < COALESCE(oi.quantity_needed,0)
                 ORDER BY o.object_name, oi.item_name, m.name
             """, fetch=True)
