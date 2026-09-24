@@ -1230,9 +1230,10 @@ if menu == "Клиенты":
         columns_per_row=3
     )
 
-    clients = get_clients()
+    clients_all = get_clients()
 
-    if client_sub in ("Клиенты", "Корректировка"):
+    if client_sub == "Клиенты":
+        clients = clients_all.copy()
         client_options = ["Все клиенты"] + (
             clients["name"].fillna("").astype(str).str.strip().loc[lambda x: x != ""].sort_values().unique().tolist()
             if not clients.empty else []
@@ -1240,18 +1241,19 @@ if menu == "Клиенты":
         selected_client = st.selectbox(
             "Отбор по клиенту",
             client_options,
-            key=f"client_filter_{client_sub}"
+            key="client_filter_list"
         )
         if selected_client != "Все клиенты":
-            clients = clients[clients["name"].fillna("").astype(str).str.strip().eq(selected_client)].copy()
+            clients = clients[
+                clients["name"].fillna("").astype(str).str.strip().eq(selected_client)
+            ].copy()
 
-    if client_sub == "Клиенты":
         st.subheader("Перечень клиентов")
         if clients.empty:
             st.info("Клиентов нет.")
         else:
             display = clients[["id", "name", "phone", "address", "email", "website", "notes"]].copy()
-            display.columns = ["ID", "Наименование", "Телефон", "Адрес", "Имейл", "Веб-сайт", "Примечание"]
+            display.columns = ["ID", "Наименование", "Телефон", "Адрес", "Email", "Веб-сайт", "Примечание"]
             st.dataframe(display, width="stretch", hide_index=True)
             render_print_html("Перечень клиентов", display, "print_clients_list")
 
@@ -1261,7 +1263,7 @@ if menu == "Клиенты":
             name = st.text_input("Наименование")
             phone = st.text_input("Телефон")
             address = st.text_input("Адрес")
-            email = st.text_input("Имейл")
+            email = st.text_input("Email")
             website = st.text_input("Веб-сайт")
             notes = st.text_area("Примечание")
             submit = st.form_submit_button("Добавить клиента")
@@ -1283,54 +1285,156 @@ if menu == "Клиенты":
                     st.rerun()
 
     elif client_sub == "Корректировка":
-        st.subheader("Корректировка клиента")
-        if clients.empty:
-            st.info("Нет клиентов для корректировки.")
-        else:
-            client_map = {f"{row['id']} — {row['name']}": int(row['id']) for _, row in clients.iterrows()}
-            selected_label = st.selectbox("Клиент", list(client_map.keys()), key="edit_client_select")
-            client_id = client_map[selected_label]
-            row = clients[clients["id"] == client_id].iloc[0]
+        # До выбора клиента в этом разделе отображается только отбор.
+        client_rows = clients_all[["id", "name", "phone", "address", "email", "website", "notes"]].copy()
+        client_rows["name"] = client_rows["name"].fillna("").astype(str).str.strip()
+        client_rows = client_rows[client_rows["name"] != ""].sort_values("name")
 
-            with st.form("edit_client_form"):
+        client_options = ["— Выберите клиента —"] + [
+            f"{int(row['id'])} — {row['name']}"
+            for _, row in client_rows.iterrows()
+        ]
+
+        selected_client_label = st.selectbox(
+            "Отбор по клиенту",
+            client_options,
+            index=0,
+            key="client_edit_filter"
+        )
+
+        if selected_client_label == "— Выберите клиента —":
+            st.info("Выберите клиента для корректировки.")
+        else:
+            client_id = int(selected_client_label.split(" — ")[0])
+            row = client_rows[client_rows["id"] == client_id].iloc[0]
+            st.subheader("Корректировка клиента")
+            pending_key = f"client_edit_pending_{client_id}"
+
+            with st.form(f"edit_client_form_{client_id}", clear_on_submit=False):
                 name = st.text_input("Наименование", value=str(row["name"] or ""))
                 phone = st.text_input("Телефон", value=str(row["phone"] or ""))
                 address = st.text_input("Адрес", value=str(row["address"] or ""))
-                email = st.text_input("Имейл", value=str(row["email"] or ""))
+                email = st.text_input("Email", value=str(row["email"] or ""))
                 website = st.text_input("Веб-сайт", value=str(row["website"] or ""))
                 notes = st.text_area("Примечание", value=str(row["notes"] or ""))
-                save = st.form_submit_button("Сохранить изменения")
-                if save:
-                    if not name.strip():
-                        st.warning("Наименование не может быть пустым.")
-                    else:
-                        run_query(
-                            """
-                            UPDATE reklet.clients
-                            SET name=%s, phone=%s, address=%s, email=%s, website=%s, notes=%s, contact_info=%s
-                            WHERE id=%s
-                            """,
-                            (name.strip(), phone.strip() or None, address.strip() or None,
-                             email.strip() or None, website.strip() or None, notes.strip() or None,
-                             phone.strip() or None, client_id)
-                        )
+                execute_client_changes = st.form_submit_button("Выполнить", use_container_width=True)
+
+            if execute_client_changes:
+                new_values = {
+                    "name": name.strip(),
+                    "phone": phone.strip() or None,
+                    "address": address.strip() or None,
+                    "email": email.strip() or None,
+                    "website": website.strip() or None,
+                    "notes": notes.strip() or None,
+                }
+                errors = []
+                if not new_values["name"]:
+                    errors.append("Наименование клиента не может быть пустым.")
+
+                comparisons = [
+                    ("name", "Наименование", str(row["name"] or "").strip(), new_values["name"]),
+                    ("phone", "Телефон", str(row["phone"] or "").strip(), new_values["phone"] or ""),
+                    ("address", "Адрес", str(row["address"] or "").strip(), new_values["address"] or ""),
+                    ("email", "Email", str(row["email"] or "").strip(), new_values["email"] or ""),
+                    ("website", "Веб-сайт", str(row["website"] or "").strip(), new_values["website"] or ""),
+                    ("notes", "Примечание", str(row["notes"] or "").strip(), new_values["notes"] or ""),
+                ]
+                changes = []
+                for _, label, old_val, new_val in comparisons:
+                    if str(old_val or "") != str(new_val or ""):
+                        changes.append({
+                            "Поле": label,
+                            "Было": old_val if old_val not in (None, "") else "—",
+                            "Станет": new_val if new_val not in (None, "") else "—",
+                        })
+
+                if errors:
+                    for err in errors:
+                        st.error(err)
+                elif changes:
+                    st.session_state[pending_key] = {
+                        "client_id": client_id,
+                        "values": new_values,
+                        "changes": changes,
+                    }
+                else:
+                    st.info("Изменений нет.")
+
+            pending = st.session_state.get(pending_key)
+            if pending:
+                st.markdown("---")
+                st.subheader("Подтверждение изменений")
+                st.dataframe(pd.DataFrame(pending["changes"]), width="stretch", hide_index=True)
+                c1, c2 = st.columns(2)
+                with c1:
+                    confirm_client_changes = st.button(
+                        "Подтвердить", key=f"confirm_client_edit_{client_id}",
+                        type="primary", use_container_width=True
+                    )
+                with c2:
+                    cancel_client_changes = st.button(
+                        "Отмена", key=f"cancel_client_edit_{client_id}",
+                        use_container_width=True
+                    )
+
+                if confirm_client_changes:
+                    v = pending["values"]
+                    try:
+                        run_transaction([
+                            (
+                                """
+                                UPDATE reklet.clients
+                                SET name=%s,
+                                    phone=%s,
+                                    address=%s,
+                                    email=%s,
+                                    website=%s,
+                                    notes=%s,
+                                    contact_info=%s
+                                WHERE id=%s
+                                """,
+                                (
+                                    v["name"], v["phone"], v["address"], v["email"],
+                                    v["website"], v["notes"], v["phone"], client_id
+                                )
+                            )
+                        ])
+                        st.session_state.pop(pending_key, None)
                         st.success("Данные клиента изменены.")
                         st.rerun()
+                    except Exception as e:
+                        st.error("Изменения не сохранены. Транзакция отменена.")
+                        st.code(str(e))
 
-            st.markdown("---")
-            st.warning("Удаление клиента необратимо. Клиент, используемый объектами, не может быть удалён.")
-            confirm = st.checkbox("Я подтверждаю удаление выбранного клиента.", key="confirm_delete_client")
-            if st.button("Удалить клиента", key="delete_client_button", disabled=not confirm):
-                used = run_query(
-                    "SELECT COUNT(*) AS cnt FROM reklet.objects WHERE client_id=%s",
-                    (client_id,), fetch=True
-                )
-                if int(used.iloc[0]["cnt"]) > 0:
-                    st.error("Удаление невозможно: этот клиент используется объектами.")
-                else:
-                    run_query("DELETE FROM reklet.clients WHERE id=%s", (client_id,))
-                    st.success("Клиент удалён.")
+                if cancel_client_changes:
+                    st.session_state.pop(pending_key, None)
                     st.rerun()
+
+            with st.expander("Безопасное удаление клиента"):
+                st.warning(
+                    "Удаление необратимо. Клиента нельзя удалить, если он используется хотя бы одним объектом."
+                )
+                delete_confirm = st.checkbox(
+                    "Я подтверждаю удаление выбранного клиента.",
+                    key=f"confirm_delete_client_{client_id}"
+                )
+                if st.button(
+                    "Удалить клиента",
+                    key=f"delete_client_{client_id}",
+                    disabled=not delete_confirm,
+                    use_container_width=True
+                ):
+                    used = run_query(
+                        "SELECT COUNT(*) AS cnt FROM reklet.objects WHERE client_id=%s",
+                        (client_id,), fetch=True
+                    )
+                    if int(used.iloc[0]["cnt"]) > 0:
+                        st.error("Удаление невозможно: этот клиент используется объектами.")
+                    else:
+                        run_query("DELETE FROM reklet.clients WHERE id=%s", (client_id,))
+                        st.success("Клиент удалён.")
+                        st.rerun()
 
 
 # OBJECTS
@@ -1519,8 +1623,7 @@ elif menu == "Объекты":
                             LEFT JOIN reklet.clients c ON c.id = o.client_id
                             WHERE o.id = %s
                             """,
-                            (object_id,),
-                            fetch=True
+                            (object_id,), fetch=True
                         )
 
                         if object_data.empty:
@@ -1534,23 +1637,13 @@ elif menu == "Объекты":
                                 ts = pd.to_datetime(value, errors="coerce")
                                 return None if pd.isna(ts) else ts.date()
 
-                            edit = pd.DataFrame([{
-                                "ID": safe_int(original.get("id")),
-                                "ID заказчика": safe_int(original.get("client_id")),
-                                "Заказчик": str(original.get("client_name") or "").strip(),
-                                "Объект": str(original.get("object_name") or "").strip(),
-                                "Адрес": str(original.get("address") or "").strip(),
-                                "Расстояние до объекта, км": safe_float(original.get("transport_distance_km")),
-                                "Телефон": str(original.get("phone") or "").strip(),
-                                "Контактное лицо": str(original.get("contact_person") or "").strip(),
-                                "Примечания": str(original.get("notes") or "").strip(),
-                                "Дата договора": as_date(original.get("contract_date")),
-                                "Начало производства": as_date(original.get("production_start_date")),
-                                "Окончание производства": as_date(original.get("production_end_date")),
-                                "Дата монтажа": as_date(original.get("installation_date")),
-                                "Окончание монтажа": as_date(original.get("installation_end_date")),
-                                "Создан": str(original.get("created_at") or "") if pd.notna(original.get("created_at")) else "",
-                            }])
+                            original_dates = {
+                                "contract_date": as_date(original.get("contract_date")),
+                                "production_start_date": as_date(original.get("production_start_date")),
+                                "production_end_date": as_date(original.get("production_end_date")),
+                                "installation_date": as_date(original.get("installation_date")),
+                                "installation_end_date": as_date(original.get("installation_end_date")),
+                            }
 
                             client_name_to_id = {
                                 str(r["name"]).strip(): int(r["id"])
@@ -1558,51 +1651,121 @@ elif menu == "Объекты":
                             }
                             client_names = list(client_name_to_id.keys())
 
+                            # Печатное представление сохраняем, но в вертикальном виде.
+                            object_view = pd.DataFrame({
+                                "Поле": [
+                                    "ID", "ID заказчика", "Заказчик", "Объект", "Адрес",
+                                    "Расстояние до объекта, км", "Телефон", "Контактное лицо",
+                                    "Примечания", "Дата договора", "Начало производства",
+                                    "Окончание производства", "Дата монтажа", "Окончание монтажа", "Создан"
+                                ],
+                                "Значение": [
+                                    safe_int(original.get("id")), safe_int(original.get("client_id")),
+                                    str(original.get("client_name") or "").strip(),
+                                    str(original.get("object_name") or "").strip(),
+                                    str(original.get("address") or "").strip(),
+                                    safe_float(original.get("transport_distance_km")),
+                                    str(original.get("phone") or "").strip(),
+                                    str(original.get("contact_person") or "").strip(),
+                                    str(original.get("notes") or "").strip(),
+                                    original_dates["contract_date"], original_dates["production_start_date"],
+                                    original_dates["production_end_date"], original_dates["installation_date"],
+                                    original_dates["installation_end_date"],
+                                    str(original.get("created_at") or "") if pd.notna(original.get("created_at")) else "",
+                                ],
+                            })
                             render_print_html(
                                 f"Данные объекта — {str(original.get('object_name') or '').strip()}",
-                                edit,
+                                object_view,
                                 f"print_object_data_{object_id}",
                                 subtitle=f"Заказчик: {str(original.get('client_name') or '').strip()}"
                             )
 
+                            # Вертикальная форма: параметр слева, значение справа.
                             with st.form(f"object_data_form_{object_id}", clear_on_submit=False):
-                                edited_object = st.data_editor(
-                                    edit,
-                                    key=f"object_data_editor_{object_id}",
-                                    width="stretch",
-                                    hide_index=True,
-                                    num_rows="fixed",
-                                    column_config={
-                                        "ID": st.column_config.NumberColumn("ID", disabled=True, format="%d"),
-                                        "ID заказчика": st.column_config.NumberColumn("ID заказчика", disabled=True, format="%d"),
-                                        "Заказчик": st.column_config.SelectboxColumn("Заказчик", options=client_names, required=True),
-                                        "Объект": st.column_config.TextColumn("Объект", required=True),
-                                        "Адрес": st.column_config.TextColumn("Адрес"),
-                                        "Расстояние до объекта, км": st.column_config.NumberColumn("Расстояние до объекта, км", min_value=0.0, step=0.1),
-                                        "Телефон": st.column_config.TextColumn("Телефон"),
-                                        "Контактное лицо": st.column_config.TextColumn("Контактное лицо"),
-                                        "Примечания": st.column_config.TextColumn("Примечания"),
-                                        "Дата договора": st.column_config.DateColumn("Дата договора", format="DD.MM.YYYY"),
-                                        "Начало производства": st.column_config.DateColumn("Начало производства", format="DD.MM.YYYY"),
-                                        "Окончание производства": st.column_config.DateColumn("Окончание производства", format="DD.MM.YYYY"),
-                                        "Дата монтажа": st.column_config.DateColumn("Дата монтажа", format="DD.MM.YYYY"),
-                                        "Окончание монтажа": st.column_config.DateColumn("Окончание монтажа", format="DD.MM.YYYY"),
-                                        "Создан": st.column_config.TextColumn("Создан", disabled=True),
-                                    },
-                                    disabled=["ID", "ID заказчика", "Создан"],
-                                )
-                                execute_object_data = st.form_submit_button(
-                                    "Выполнить",
-                                    use_container_width=True
-                                )
+                                c1, c2 = st.columns([1, 2], gap="small")
+                                with c1: st.markdown("**ID**")
+                                with c2:
+                                    st.text_input("ID", value=str(safe_int(original.get("id"))), disabled=True,
+                                                  label_visibility="collapsed", key=f"obj_id_{object_id}")
+
+                                c1, c2 = st.columns([1, 2], gap="small")
+                                with c1: st.markdown("**ID заказчика**")
+                                with c2:
+                                    st.text_input("ID заказчика", value=str(safe_int(original.get("client_id"))), disabled=True,
+                                                  label_visibility="collapsed", key=f"obj_client_id_{object_id}")
+
+                                current_client_name = str(original.get("client_name") or "").strip()
+                                c1, c2 = st.columns([1, 2], gap="small")
+                                with c1: st.markdown("**Заказчик**")
+                                with c2:
+                                    edited_client_name = st.selectbox(
+                                        "Заказчик", client_names,
+                                        index=client_names.index(current_client_name) if current_client_name in client_names else 0,
+                                        key=f"obj_client_name_{object_id}", label_visibility="collapsed"
+                                    )
+
+                                fields = [
+                                    ("Объект", "obj_name", str(original.get("object_name") or "").strip()),
+                                    ("Адрес", "obj_address", str(original.get("address") or "").strip()),
+                                    ("Телефон", "obj_phone", str(original.get("phone") or "").strip()),
+                                    ("Контактное лицо", "obj_contact", str(original.get("contact_person") or "").strip()),
+                                    ("Примечания", "obj_notes", str(original.get("notes") or "").strip()),
+                                ]
+                                edited_text = {}
+                                for label, key_name, value in fields:
+                                    c1, c2 = st.columns([1, 2], gap="small")
+                                    with c1: st.markdown(f"**{label}**")
+                                    with c2:
+                                        edited_text[key_name] = st.text_input(
+                                            label, value=value, label_visibility="collapsed",
+                                            key=f"{key_name}_{object_id}"
+                                        )
+
+                                c1, c2 = st.columns([1, 2], gap="small")
+                                with c1: st.markdown("**Расстояние до объекта, км**")
+                                with c2:
+                                    edited_distance = st.number_input(
+                                        "Расстояние до объекта, км", min_value=0.0,
+                                        value=max(0.0, safe_float(original.get("transport_distance_km"))), step=0.1,
+                                        label_visibility="collapsed", key=f"obj_distance_{object_id}"
+                                    )
+
+                                date_fields = [
+                                    ("Дата договора", "contract_date", f"obj_contract_{object_id}"),
+                                    ("Начало производства", "production_start_date", f"obj_prod_start_{object_id}"),
+                                    ("Окончание производства", "production_end_date", f"obj_prod_end_{object_id}"),
+                                    ("Дата монтажа", "installation_date", f"obj_install_{object_id}"),
+                                    ("Окончание монтажа", "installation_end_date", f"obj_install_end_{object_id}"),
+                                ]
+                                edited_dates = {}
+                                for label, field_name, field_key in date_fields:
+                                    c1, c2 = st.columns([1, 2], gap="small")
+                                    with c1: st.markdown(f"**{label}**")
+                                    with c2:
+                                        default_date = original_dates[field_name] or pd.Timestamp.today().date()
+                                        edited_dates[field_name] = st.date_input(
+                                            label, value=default_date,
+                                            label_visibility="collapsed", key=field_key
+                                        )
+
+                                c1, c2 = st.columns([1, 2], gap="small")
+                                with c1: st.markdown("**Создан**")
+                                with c2:
+                                    st.text_input(
+                                        "Создан",
+                                        value=str(original.get("created_at") or "") if pd.notna(original.get("created_at")) else "",
+                                        disabled=True, label_visibility="collapsed", key=f"obj_created_{object_id}"
+                                    )
+
+                                execute_object_data = st.form_submit_button("Выполнить", use_container_width=True)
 
                             pending_key = f"object_data_pending_{object_id}"
 
                             if execute_object_data:
-                                row = edited_object.iloc[0]
-                                new_client_name = str(row.get("Заказчик") or "").strip()
-                                new_object_name = str(row.get("Объект") or "").strip()
-                                new_distance = safe_float(row.get("Расстояние до объекта, км"))
+                                new_client_name = str(edited_client_name or "").strip()
+                                new_object_name = str(edited_text["obj_name"] or "").strip()
+                                new_distance = safe_float(edited_distance)
                                 errors = []
 
                                 if new_client_name not in client_name_to_id:
@@ -1615,72 +1778,61 @@ elif menu == "Объекты":
                                 new_values = {
                                     "client_id": client_name_to_id.get(new_client_name),
                                     "object_name": new_object_name,
-                                    "address": str(row.get("Адрес") or "").strip() or None,
+                                    "address": edited_text["obj_address"].strip() or None,
                                     "transport_distance_km": new_distance,
-                                    "phone": str(row.get("Телефон") or "").strip() or None,
-                                    "contact_person": str(row.get("Контактное лицо") or "").strip() or None,
-                                    "notes": str(row.get("Примечания") or "").strip() or None,
-                                    "contract_date": as_date(row.get("Дата договора")),
-                                    "production_start_date": as_date(row.get("Начало производства")),
-                                    "production_end_date": as_date(row.get("Окончание производства")),
-                                    "installation_date": as_date(row.get("Дата монтажа")),
-                                    "installation_end_date": as_date(row.get("Окончание монтажа")),
+                                    "phone": edited_text["obj_phone"].strip() or None,
+                                    "contact_person": edited_text["obj_contact"].strip() or None,
+                                    "notes": edited_text["obj_notes"].strip() or None,
+                                    "contract_date": edited_dates["contract_date"],
+                                    "production_start_date": edited_dates["production_start_date"],
+                                    "production_end_date": edited_dates["production_end_date"],
+                                    "installation_date": edited_dates["installation_date"],
+                                    "installation_end_date": edited_dates["installation_end_date"],
                                 }
 
-                                if not errors:
-                                    original_dates = {
-                                        "contract_date": as_date(original.get("contract_date")),
-                                        "production_start_date": as_date(original.get("production_start_date")),
-                                        "production_end_date": as_date(original.get("production_end_date")),
-                                        "installation_date": as_date(original.get("installation_date")),
-                                        "installation_end_date": as_date(original.get("installation_end_date")),
-                                    }
-
-                                    comparisons = [
-                                        ("client_id", "Заказчик", str(original.get("client_name") or "").strip(), new_client_name),
-                                        ("object_name", "Объект", str(original.get("object_name") or "").strip(), new_values["object_name"]),
-                                        ("address", "Адрес", str(original.get("address") or "").strip(), new_values["address"] or ""),
-                                        ("transport_distance_km", "Расстояние до объекта, км", safe_float(original.get("transport_distance_km")), new_values["transport_distance_km"]),
-                                        ("phone", "Телефон", str(original.get("phone") or "").strip(), new_values["phone"] or ""),
-                                        ("contact_person", "Контактное лицо", str(original.get("contact_person") or "").strip(), new_values["contact_person"] or ""),
-                                        ("notes", "Примечания", str(original.get("notes") or "").strip(), new_values["notes"] or ""),
-                                        ("contract_date", "Дата договора", original_dates["contract_date"], new_values["contract_date"]),
-                                        ("production_start_date", "Начало производства", original_dates["production_start_date"], new_values["production_start_date"]),
-                                        ("production_end_date", "Окончание производства", original_dates["production_end_date"], new_values["production_end_date"]),
-                                        ("installation_date", "Дата монтажа", original_dates["installation_date"], new_values["installation_date"]),
-                                        ("installation_end_date", "Окончание монтажа", original_dates["installation_end_date"], new_values["installation_end_date"]),
-                                    ]
-
-                                    changes = []
-                                    for key, label, old_val, new_val in comparisons:
-                                        if key == "transport_distance_km":
-                                            old_cmp = round(float(old_val or 0), 6)
-                                            new_cmp = round(float(new_val or 0), 6)
-                                        elif key in original_dates or key in {"contract_date", "production_start_date", "production_end_date", "installation_date", "installation_end_date"}:
-                                            old_cmp = old_val.isoformat() if old_val else None
-                                            new_cmp = new_val.isoformat() if new_val else None
-                                        else:
-                                            old_cmp = str(old_val or "")
-                                            new_cmp = str(new_val or "")
-
-                                        if old_cmp != new_cmp:
-                                            changes.append({
-                                                "Поле": label,
-                                                "Было": old_val if old_val not in (None, "") else "—",
-                                                "Станет": new_val if new_val not in (None, "") else "—",
-                                            })
-
-                                    if changes:
-                                        st.session_state[pending_key] = {
-                                            "object_id": object_id,
-                                            "values": new_values,
-                                            "changes": changes,
-                                        }
+                                comparisons = [
+                                    ("client_id", "Заказчик", str(original.get("client_name") or "").strip(), new_client_name),
+                                    ("object_name", "Объект", str(original.get("object_name") or "").strip(), new_values["object_name"]),
+                                    ("address", "Адрес", str(original.get("address") or "").strip(), new_values["address"] or ""),
+                                    ("transport_distance_km", "Расстояние до объекта, км", safe_float(original.get("transport_distance_km")), new_values["transport_distance_km"]),
+                                    ("phone", "Телефон", str(original.get("phone") or "").strip(), new_values["phone"] or ""),
+                                    ("contact_person", "Контактное лицо", str(original.get("contact_person") or "").strip(), new_values["contact_person"] or ""),
+                                    ("notes", "Примечания", str(original.get("notes") or "").strip(), new_values["notes"] or ""),
+                                    ("contract_date", "Дата договора", original_dates["contract_date"], new_values["contract_date"]),
+                                    ("production_start_date", "Начало производства", original_dates["production_start_date"], new_values["production_start_date"]),
+                                    ("production_end_date", "Окончание производства", original_dates["production_end_date"], new_values["production_end_date"]),
+                                    ("installation_date", "Дата монтажа", original_dates["installation_date"], new_values["installation_date"]),
+                                    ("installation_end_date", "Окончание монтажа", original_dates["installation_end_date"], new_values["installation_end_date"]),
+                                ]
+                                changes = []
+                                for key, label, old_val, new_val in comparisons:
+                                    if key == "transport_distance_km":
+                                        old_cmp = round(float(old_val or 0), 6)
+                                        new_cmp = round(float(new_val or 0), 6)
+                                    elif key in {"contract_date", "production_start_date", "production_end_date", "installation_date", "installation_end_date"}:
+                                        old_cmp = old_val.isoformat() if old_val else None
+                                        new_cmp = new_val.isoformat() if new_val else None
                                     else:
-                                        st.info("Изменений нет.")
-                                else:
+                                        old_cmp = str(old_val or "")
+                                        new_cmp = str(new_val or "")
+                                    if old_cmp != new_cmp:
+                                        changes.append({
+                                            "Поле": label,
+                                            "Было": old_val if old_val not in (None, "") else "—",
+                                            "Станет": new_val if new_val not in (None, "") else "—",
+                                        })
+
+                                if errors:
                                     for err in errors:
                                         st.error(err)
+                                elif changes:
+                                    st.session_state[pending_key] = {
+                                        "object_id": object_id,
+                                        "values": new_values,
+                                        "changes": changes,
+                                    }
+                                else:
+                                    st.info("Изменений нет.")
 
                             pending = st.session_state.get(pending_key)
                             if pending:
@@ -1690,16 +1842,12 @@ elif menu == "Объекты":
                                 c1, c2 = st.columns(2)
                                 with c1:
                                     confirm_changes = st.button(
-                                        "Подтвердить",
-                                        key=f"confirm_object_data_{object_id}",
-                                        type="primary",
-                                        use_container_width=True
+                                        "Подтвердить", key=f"confirm_object_data_{object_id}",
+                                        type="primary", use_container_width=True
                                     )
                                 with c2:
                                     cancel_changes = st.button(
-                                        "Отмена",
-                                        key=f"cancel_object_data_{object_id}",
-                                        use_container_width=True
+                                        "Отмена", key=f"cancel_object_data_{object_id}", use_container_width=True
                                     )
 
                                 if confirm_changes:
@@ -1733,7 +1881,6 @@ elif menu == "Объекты":
                                             )
                                         ])
                                         st.session_state.pop(pending_key, None)
-                                        st.session_state.pop(f"object_data_editor_{object_id}", None)
                                         st.success("Данные объекта изменены.")
                                         st.rerun()
                                     except Exception as e:
@@ -1744,9 +1891,7 @@ elif menu == "Объекты":
                                     st.session_state.pop(pending_key, None)
                                     st.rerun()
 
-                            # ------------------------------------------------------------
-                            # БЕЗОПАСНОЕ УДАЛЕНИЕ ОБЪЕКТА — ОТДЕЛЬНОЕ РАСКРЫВАЮЩЕЕСЯ ОКНО
-                            # ------------------------------------------------------------
+                            # Existing safe deletion block remains in its closed expander.
                             with st.expander("Безопасное удаление объекта"):
                                 st.warning(
                                     "Удаление необратимо. Объект можно удалить только если в системе нет "
@@ -1772,9 +1917,9 @@ elif menu == "Объекты":
                                             (SELECT COUNT(*) FROM reklet.transport_transactions WHERE object_id=%s) AS transport_transactions,
                                             (SELECT COUNT(*) FROM reklet.installation_transactions WHERE object_id=%s) AS installation_transactions,
                                             (SELECT COUNT(*) FROM reklet.material_transactions WHERE object_id=%s) AS material_transactions,
-                                             (SELECT COUNT(*) FROM reklet.material_reservations WHERE object_id=%s) AS material_reservations,
-                                             (SELECT COUNT(*) FROM reklet.purchase_order_items WHERE object_id=%s) AS purchase_order_items,
-                                             (SELECT COUNT(*) FROM reklet.material_consumption WHERE object_id=%s) AS material_consumption
+                                            (SELECT COUNT(*) FROM reklet.material_reservations WHERE object_id=%s) AS material_reservations,
+                                            (SELECT COUNT(*) FROM reklet.purchase_order_items WHERE object_id=%s) AS purchase_order_items,
+                                            (SELECT COUNT(*) FROM reklet.material_consumption WHERE object_id=%s) AS material_consumption
                                         """,
                                         (object_id, object_id, object_id, object_id, object_id, object_id, object_id, object_id, object_id, object_id),
                                         fetch=True
@@ -1788,28 +1933,21 @@ elif menu == "Объекты":
                                         "transport_transactions": "история транспортировки",
                                         "installation_transactions": "история монтажа",
                                         "material_transactions": "движения материалов по объекту",
-                                         "material_reservations": "резерв материалов по объекту",
-                                         "purchase_order_items": "закупки материалов по объекту",
-                                         "material_consumption": "списание материалов в производстве",
+                                        "material_reservations": "резерв материалов по объекту",
+                                        "purchase_order_items": "закупки материалов по объекту",
+                                        "material_consumption": "списание материалов в производстве",
                                     }
                                     blocking_refs = [
-                                        label
-                                        for key, label in ref_labels.items()
+                                        label for key, label in ref_labels.items()
                                         if int(refs.get(key, 0) or 0) > 0
                                     ]
-
                                     if blocking_refs:
                                         st.error(
-                                            "Удаление запрещено. Связанные данные: "
-                                            + ", ".join(blocking_refs)
-                                            + "."
+                                            "Удаление запрещено. Связанные данные: " + ", ".join(blocking_refs) + "."
                                         )
                                     else:
                                         try:
-                                            run_query(
-                                                "DELETE FROM reklet.objects WHERE id=%s",
-                                                (object_id,)
-                                            )
+                                            run_query("DELETE FROM reklet.objects WHERE id=%s", (object_id,))
                                             st.success("Объект безопасно удалён.")
                                             st.rerun()
                                         except Exception as e:
@@ -2759,12 +2897,12 @@ elif menu == "Объекты":
                 st.info("Для этого объекта ещё не созданы изделия.")
             else:
                 display = items[[
-                    "id", "item_name", "quantity", "qty_new", "qty_production",
+                    "id", "item_name", "quantity", "qty_production",
                     "qty_ready", "qty_shipped", "qty_arrived", "qty_installing",
                     "qty_installed"
                 ]].copy()
                 display.columns = [
-                    "ID", "Изделие", "Количество", "Новые", "Производство",
+                    "ID", "Изделие", "Количество", "Производство",
                     "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"
                 ]
                 st.dataframe(display, width="stretch", hide_index=True)
