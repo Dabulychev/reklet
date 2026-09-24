@@ -2448,6 +2448,7 @@ elif menu == "Объекты":
                     )
                     SELECT
                         o.id,
+                        COALESCE(c.name, '') AS client_name,
                         o.object_name,
                         CASE
                             WHEN s.item_count IS NULL OR s.item_count = 0 THEN NULL
@@ -2463,6 +2464,7 @@ elif menu == "Объекты":
                             ELSE 'Согласован'
                         END AS status
                     FROM reklet.objects o
+                    LEFT JOIN reklet.clients c ON c.id = o.client_id
                     LEFT JOIN item_state s ON s.object_id = o.id
                     LEFT JOIN production_history p ON p.object_id = o.id
                     WHERE s.item_count IS NOT NULL AND s.item_count > 0
@@ -2477,8 +2479,8 @@ elif menu == "Объекты":
                     if status_filter != "Все объекты":
                         status_df = status_df[status_df["status"] == status_filter].copy()
 
-                    status_view = status_df[["object_name", "status"]].copy()
-                    status_view.columns = ["Название Объекта", "Статус"]
+                    status_view = status_df[["client_name", "object_name", "status"]].copy()
+                    status_view.columns = ["Заказчик", "Объект", "Статус"]
 
                     if status_view.empty:
                         st.info("Объектов с выбранным статусом нет.")
