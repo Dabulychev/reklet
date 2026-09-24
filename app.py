@@ -1444,12 +1444,12 @@ elif menu == "Объекты":
 
     sub = render_button_nav(
         [
-            "Список объектов",
-            "Данные объектов",
-            "Состав объектов",
-            "Добавить Объект",
+            "Перечень объектов",
+            "Создать новый объект",
+            "Данные объекта",
+            "Содержимое объекта",
             "Добавить изделия в объект",
-            "Потребность в материалах",
+            "Материалы объекта",
             "Управление объектами"
         ],
         "objects_navigation",
@@ -1523,7 +1523,7 @@ elif menu == "Объекты":
     # ------------------------------------------------------------
     # СПИСОК ОБЪЕКТОВ
     # ------------------------------------------------------------
-    if sub == "Список объектов":
+    if sub == "Перечень объектов":
         df = get_objects()
         if df.empty:
             st.info("Объектов нет.")
@@ -1556,7 +1556,7 @@ elif menu == "Объекты":
     # ------------------------------------------------------------
     # ДАННЫЕ ОБЪЕКТА — ДВОЙНОЙ ОТБОР + EXCEL-LIKE КОРРЕКЦИЯ
     # ------------------------------------------------------------
-    elif sub == "Данные объектов":
+    elif sub == "Данные объекта":
         clients = get_clients()
         objects = get_objects().sort_values("id", ascending=False).copy()
 
@@ -2887,7 +2887,7 @@ elif menu == "Объекты":
     # ------------------------------------------------------------
     # СОСТАВ ОБЪЕКТА — ТОЛЬКО ПРОСМОТР
     # ------------------------------------------------------------
-    elif sub == "Состав объектов":
+    elif sub == "Содержимое объекта":
         object_id, object_row = select_object_by_customer("object_composition")
 
         if object_id is not None:
@@ -2896,15 +2896,9 @@ elif menu == "Объекты":
             if items.empty:
                 st.info("Для этого объекта ещё не созданы изделия.")
             else:
-                display = items[[
-                    "id", "item_name", "quantity", "qty_production",
-                    "qty_ready", "qty_shipped", "qty_arrived", "qty_installing",
-                    "qty_installed"
-                ]].copy()
-                display.columns = [
-                    "ID", "Изделие", "Количество", "Производство",
-                    "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"
-                ]
+                display = items[["item_name", "quantity"]].copy().reset_index(drop=True)
+                display.insert(0, "Nп/п", range(1, len(display) + 1))
+                display.columns = ["Nп/п", "Изделие", "Количество"]
                 st.dataframe(display, width="stretch", hide_index=True)
                 render_print_html(
                     f"Состав объекта — {str(object_row.get('object_name', '') or '').strip()}",
@@ -2915,7 +2909,7 @@ elif menu == "Объекты":
     # ------------------------------------------------------------
     # ПОТРЕБНОСТЬ В МАТЕРИАЛАХ
     # ------------------------------------------------------------
-    elif sub == "Потребность в материалах":
+    elif sub == "Материалы объекта":
         object_id, object_row = select_object_by_customer("object_material_requirement")
 
         if object_id is not None:
@@ -2980,7 +2974,7 @@ elif menu == "Объекты":
     # ------------------------------------------------------------
     # ДОБАВИТЬ ОБЪЕКТ
     # ------------------------------------------------------------
-    elif sub == "Добавить Объект":
+    elif sub == "Создать новый объект":
         clients = get_clients()
         client_map = {str(row["name"]): int(row["id"]) for _, row in clients.iterrows()} if not clients.empty else {}
         st.subheader("Создать объект")
