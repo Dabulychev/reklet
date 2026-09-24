@@ -4584,8 +4584,7 @@ elif menu == "Отчёты":
     if "reports_section" not in st.session_state:
         st.session_state["reports_section"] = "Сводные таблицы"
 
-    rb1, rb2 = st.columns(2)
-    rb3, rb4 = st.columns(2)
+    rb1, rb2, rb3, rb4, rb5 = st.columns(5)
 
     with rb1:
         if st.button("Сводные таблицы", key="reports_summary_btn", use_container_width=True):
@@ -4602,6 +4601,10 @@ elif menu == "Отчёты":
     with rb4:
         if st.button("Складские отчёты", key="reports_stock_btn", use_container_width=True):
             st.session_state["reports_section"] = "Складские отчёты"
+            st.rerun()
+    with rb5:
+        if st.button("Все движения", key="reports_movements_btn", use_container_width=True):
+            st.session_state["reports_section"] = "Все движения"
             st.rerun()
 
     st.markdown("---")
@@ -4738,7 +4741,205 @@ elif menu == "Отчёты":
             render_print_html("Общие показатели", totals, "print_report_totals")
 
     # ========================================================
-    # 2. PRINT DOCUMENTS
+    # 2. ALL MOVEMENTS
+    # ========================================================
+    elif st.session_state["reports_section"] == "Все движения":
+
+        st.subheader("Все движения")
+        st.caption("Одна строка = одна транзакция в базе данных. Фильтры можно комбинировать.")
+
+        movements_q = """
+            SELECT * FROM (
+                SELECT
+                    pt.created_at AS tx_date,
+                    'Производство'::text AS section_name,
+                    CASE pt.operation_type
+                        WHEN 'completed' THEN 'Изготовлено'
+                        ELSE pt.operation_type
+                    END AS operation_name,
+                    c.name AS client_name,
+                    o.object_name,
+                    oi.item_name AS product_name,
+                    NULL::text AS material_name,
+                    NULL::text AS supplier_name,
+                    pt.quantity::numeric AS quantity
+                FROM reklet.production_transactions pt
+                LEFT JOIN reklet.objects o ON o.id = pt.object_id
+                LEFT JOIN reklet.clients c ON c.id = o.client_id
+                LEFT JOIN reklet.object_items oi ON oi.id = pt.object_item_id
+
+                UNION ALL
+
+                SELECT
+                    fgt.created_at AS tx_date,
+                    'Склад'::text AS section_name,
+                    CASE fgt.operation_type
+                        WHEN 'ready' THEN 'Поступило на склад'
+                        WHEN 'ship' THEN 'Отгружено'
+                        WHEN 'arrive' THEN 'Доставлено на объект'
+                        ELSE fgt.operation_type
+                    END AS operation_name,
+                    c.name AS client_name,
+                    o.object_name,
+                    oi.item_name AS product_name,
+                    NULL::text AS material_name,
+                    NULL::text AS supplier_name,
+                    fgt.quantity::numeric AS quantity
+                FROM reklet.finished_goods_transactions fgt
+                LEFT JOIN reklet.objects o ON o.id = fgt.object_id
+                LEFT JOIN reklet.clients c ON c.id = o.client_id
+                LEFT JOIN reklet.object_items oi ON oi.id = fgt.object_item_id
+
+                UNION ALL
+
+                SELECT
+                    mt.created_at AS tx_date,
+                    'Склад'::text AS section_name,
+                    CASE mt.operation_type
+                        WHEN 'purchase' THEN 'Приход материала'
+                        WHEN 'production_transfer' THEN 'Выдано в производство'
+                        ELSE mt.operation_type
+                    END AS operation_name,
+                    c.name AS client_name,
+                    o.object_name,
+                    NULL::text AS product_name,
+                    m.name AS material_name,
+                    s.name AS supplier_name,
+                    mt.quantity::numeric AS quantity
+                FROM reklet.material_transactions mt
+                LEFT JOIN reklet.materials m ON m.id = mt.material_id
+                LEFT JOIN reklet.suppliers s ON s.id = mt.supplier_id
+                LEFT JOIN reklet.objects o ON o.id = mt.object_id
+                LEFT JOIN reklet.clients c ON c.id = o.client_id
+
+                UNION ALL
+
+                SELECT
+                    tt.created_at AS tx_date,
+                    'Транспортировка'::text AS section_name,
+                    CASE tt.operation_type
+                        WHEN 'ship' THEN 'Отправлено'
+                        WHEN 'arrive' THEN 'Доставлено'
+                        ELSE tt.operation_type
+                    END AS operation_name,
+                    c.name AS client_name,
+                    o.object_name,
+                    oi.item_name AS product_name,
+                    NULL::text AS material_name,
+                    NULL::text AS supplier_name,
+                    tt.quantity::numeric AS quantity
+                FROM reklet.transport_transactions tt
+                LEFT JOIN reklet.objects o ON o.id = tt.object_id
+                LEFT JOIN reklet.clients c ON c.id = o.client_id
+                LEFT JOIN reklet.object_items oi ON oi.id = tt.object_item_id
+
+                UNION ALL
+
+                SELECT
+                    it.created_at AS tx_date,
+                    'Монтаж'::text AS section_name,
+                    CASE it.operation_type
+                        WHEN 'complete' THEN 'Установлено'
+                        ELSE it.operation_type
+                    END AS operation_name,
+                    c.name AS client_name,
+                    o.object_name,
+                    oi.item_name AS product_name,
+                    NULL::text AS material_name,
+                    NULL::text AS supplier_name,
+                    it.quantity::numeric AS quantity
+                FROM reklet.installation_transactions it
+                LEFT JOIN reklet.objects o ON o.id = it.object_id
+                LEFT JOIN reklet.clients c ON c.id = o.client_id
+                LEFT JOIN reklet.object_items oi ON oi.id = it.object_item_id
+            ) movements
+            ORDER BY tx_date DESC
+        """
+
+        movements = run_query(movements_q, fetch=True)
+
+        if movements.empty:
+            st.info("Транзакций в базе данных пока нет.")
+        else:
+            def movement_options(column, first_label="Все"):
+                vals = (
+                    movements[column]
+                    .fillna("")
+                    .astype(str)
+                    .replace("", pd.NA)
+                    .dropna()
+                    .drop_duplicates()
+                    .sort_values()
+                    .tolist()
+                )
+                return [first_label] + vals
+
+            f1, f2, f3 = st.columns(3)
+            f4, f5, f6 = st.columns(3)
+
+            with f1:
+                movement_client = st.selectbox(
+                    "Заказчик", movement_options("client_name"), key="movement_filter_client"
+                )
+            with f2:
+                movement_object = st.selectbox(
+                    "Объект", movement_options("object_name"), key="movement_filter_object"
+                )
+            with f3:
+                movement_section = st.selectbox(
+                    "Раздел",
+                    ["Все", "Производство", "Склад", "Транспортировка", "Монтаж"],
+                    key="movement_filter_section"
+                )
+            with f4:
+                movement_supplier = st.selectbox(
+                    "Поставщик", movement_options("supplier_name"), key="movement_filter_supplier"
+                )
+            with f5:
+                movement_material = st.selectbox(
+                    "Материал", movement_options("material_name"), key="movement_filter_material"
+                )
+            with f6:
+                movement_product = st.selectbox(
+                    "Изделие", movement_options("product_name"), key="movement_filter_product"
+                )
+
+            filtered = movements.copy()
+
+            if movement_client != "Все":
+                filtered = filtered[filtered["client_name"].fillna("").astype(str) == movement_client]
+            if movement_object != "Все":
+                filtered = filtered[filtered["object_name"].fillna("").astype(str) == movement_object]
+            if movement_section != "Все":
+                filtered = filtered[filtered["section_name"] == movement_section]
+            if movement_supplier != "Все":
+                filtered = filtered[filtered["supplier_name"].fillna("").astype(str) == movement_supplier]
+            if movement_material != "Все":
+                filtered = filtered[filtered["material_name"].fillna("").astype(str) == movement_material]
+            if movement_product != "Все":
+                filtered = filtered[filtered["product_name"].fillna("").astype(str) == movement_product]
+
+            view = filtered.rename(columns={
+                "tx_date": "Дата",
+                "section_name": "Раздел",
+                "operation_name": "Действие",
+                "client_name": "Заказчик",
+                "object_name": "Объект",
+                "product_name": "Изделие",
+                "material_name": "Материал",
+                "supplier_name": "Поставщик",
+                "quantity": "Количество",
+            })[[
+                "Дата", "Раздел", "Действие", "Заказчик", "Объект",
+                "Изделие", "Материал", "Поставщик", "Количество"
+            ]]
+
+            st.dataframe(view, width="stretch", hide_index=True)
+            st.caption(f"Показано транзакций: {len(view)} из {len(movements)}")
+            render_print_html("Все движения", view, "print_all_movements")
+
+    # ========================================================
+    # 3. PRINT DOCUMENTS
     # ========================================================
     elif st.session_state["reports_section"] == "Печать документов":
 
