@@ -3490,8 +3490,11 @@ elif menu == "Склад материалов":
                             mid=safe_int(row["ID"]); qty=safe_float(row["Выдать"]); stock=safe_float(row["На складе"]); reserved=safe_float(row["Зарезервировано"])
                             if qty>stock+1e-9: errors.append(f"{row['Материал']}: на складе только {stock:.4f}.")
                             if qty>reserved+1e-9: errors.append(f"{row['Материал']}: зарезервировано только {reserved:.4f} для этого объекта.")
-                            statements.extend([("INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')",(mid,object_id,qty)),("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",(qty,mid)),("UPDATE reklet.material_reservations SET quantity_reserved=quantity_reserved-%s,updated_at=timezone('utc'::text,now()) WHERE object_id=%s AND material_id=%s",(qty,object_id,mid))])
-                        statements.append(("DELETE FROM reklet.material_reservations WHERE object_id=%s AND quantity_reserved<=0",(object_id,)))
+                            statements.extend([("INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')",(mid,object_id,qty)),("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",(qty,mid))])
+                            if abs(qty-reserved) <= 1e-9:
+                                statements.append(("DELETE FROM reklet.material_reservations WHERE object_id=%s AND material_id=%s",(object_id,mid)))
+                            else:
+                                statements.append(("UPDATE reklet.material_reservations SET quantity_reserved=quantity_reserved-%s,updated_at=timezone('utc'::text,now()) WHERE object_id=%s AND material_id=%s",(qty,object_id,mid)))
                         if selected.empty: st.warning("Выберите материалы и укажите количество.")
                         elif errors: st.error("Выдача не выполнена:\n"+"\n".join(errors))
                         else: run_transaction(statements); st.success("Материалы выданы в производство."); st.session_state.pop(f"issue_materials_editor_{object_id}_{scope}",None); st.rerun()
