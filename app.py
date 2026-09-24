@@ -1225,8 +1225,8 @@ elif menu == "Объекты":
                 df = df[
                     df["client_name"].fillna("").astype(str).str.strip().eq(customer_filter)
                 ].copy()
-            display = df[["id", "object_name", "client_name", "address"]].copy()
-            display.columns = ["ID", "Объект", "Заказчик", "Адрес"]
+            display = df[["id", "client_name", "object_name", "address"]].copy()
+            display.columns = ["ID", "Заказчик", "Объект", "Адрес"]
             st.dataframe(display, width="stretch", hide_index=True)
 
     # ------------------------------------------------------------
