@@ -436,6 +436,79 @@ def initialize_database():
         run_query(statement)
 
 
+def ensure_material_planning_tables():
+    """Create warehouse planning tables once per authenticated Streamlit session."""
+    if st.session_state.get("_material_planning_tables_ready"):
+        return
+
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS reklet.material_reservations (
+            id serial4 PRIMARY KEY,
+            object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
+            material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
+            quantity_reserved numeric NOT NULL DEFAULT 0,
+            created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+            updated_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+            CONSTRAINT material_reservations_positive_check CHECK (quantity_reserved > 0),
+            CONSTRAINT material_reservations_unique UNIQUE (object_id, material_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS reklet.purchase_orders (
+            id serial4 PRIMARY KEY,
+            supplier_id int4 NOT NULL REFERENCES reklet.suppliers(id) ON DELETE RESTRICT,
+            order_date date NOT NULL DEFAULT CURRENT_DATE,
+            status text NOT NULL DEFAULT 'ordered',
+            notes text NULL,
+            created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+            CONSTRAINT purchase_orders_status_check CHECK (status IN ('ordered','partial','received','cancelled'))
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS reklet.purchase_order_items (
+            id serial4 PRIMARY KEY,
+            purchase_order_id int4 NOT NULL REFERENCES reklet.purchase_orders(id) ON DELETE CASCADE,
+            object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
+            material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
+            quantity_ordered numeric NOT NULL,
+            quantity_received numeric NOT NULL DEFAULT 0,
+            unit_price numeric NULL DEFAULT 0,
+            created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+            CONSTRAINT purchase_order_items_ordered_positive_check CHECK (quantity_ordered > 0),
+            CONSTRAINT purchase_order_items_received_nonnegative_check CHECK (quantity_received >= 0),
+            CONSTRAINT purchase_order_items_received_limit_check CHECK (quantity_received <= quantity_ordered)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS reklet.material_consumption (
+            id serial4 PRIMARY KEY,
+            object_item_id int4 NOT NULL REFERENCES reklet.object_items(id) ON DELETE RESTRICT,
+            object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
+            material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
+            quantity numeric NOT NULL,
+            created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+            CONSTRAINT material_consumption_positive_check CHECK (quantity > 0)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_material_reservations_object ON reklet.material_reservations(object_id)",
+        "CREATE INDEX IF NOT EXISTS idx_material_reservations_material ON reklet.material_reservations(material_id)",
+        "CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON reklet.purchase_orders(supplier_id)",
+        "CREATE INDEX IF NOT EXISTS idx_purchase_order_items_order ON reklet.purchase_order_items(purchase_order_id)",
+        "CREATE INDEX IF NOT EXISTS idx_purchase_order_items_object_material ON reklet.purchase_order_items(object_id, material_id)",
+        "CREATE INDEX IF NOT EXISTS idx_material_consumption_object ON reklet.material_consumption(object_id)",
+        "CREATE INDEX IF NOT EXISTS idx_material_consumption_item ON reklet.material_consumption(object_item_id)",
+        "CREATE INDEX IF NOT EXISTS idx_material_consumption_material ON reklet.material_consumption(material_id)"
+    ]
+
+    try:
+        run_transaction([(statement, ()) for statement in statements])
+        st.session_state["_material_planning_tables_ready"] = True
+    except Exception:
+        st.session_state["_material_planning_tables_ready"] = False
+        raise
+
+
 # ============================================================
 # DATABASE STARTUP
 # ============================================================
@@ -526,6 +599,14 @@ if not st.session_state["authentication_status"]:
                     "Неверный логин или пароль"
                 )
 
+    st.stop()
+
+
+try:
+    ensure_material_planning_tables()
+except Exception as e:
+    st.error("Не удалось подготовить складскую модель данных.")
+    st.code(str(e))
     st.stop()
 
 
@@ -901,6 +982,84 @@ def get_object_items(object_id):
         (object_id,),
         fetch=True
     )
+
+
+def get_object_material_planning(object_id):
+    """Material demand plus issued/reserved/purchased state for one object."""
+    df = run_query(
+        """
+        WITH demand AS (
+            SELECT ptm.material_id,
+                   SUM(COALESCE(oi.quantity_needed,0)
+                       * COALESCE(ptm.quantity_per_unit,0)
+                       * COALESCE(ptm.waste_coefficient,1)) AS required_quantity
+            FROM reklet.object_items oi
+            JOIN reklet.product_template_materials ptm
+              ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
+            WHERE oi.object_id=%s
+            GROUP BY ptm.material_id
+        ),
+        issued AS (
+            SELECT material_id,SUM(quantity) AS issued_quantity
+            FROM reklet.material_transactions
+            WHERE object_id=%s AND operation_type='production_transfer' AND transaction_type='OUT'
+            GROUP BY material_id
+        ),
+        consumed AS (
+            SELECT material_id,SUM(quantity) AS consumed_quantity
+            FROM reklet.material_consumption
+            WHERE object_id=%s
+            GROUP BY material_id
+        ),
+        reservations AS (
+            SELECT material_id,quantity_reserved
+            FROM reklet.material_reservations
+            WHERE object_id=%s
+        ),
+        all_reservations AS (
+            SELECT material_id,SUM(quantity_reserved) AS total_reserved
+            FROM reklet.material_reservations
+            GROUP BY material_id
+        ),
+        open_orders AS (
+            SELECT poi.material_id,
+                   SUM(GREATEST(poi.quantity_ordered-poi.quantity_received,0)) AS ordered_outstanding
+            FROM reklet.purchase_order_items poi
+            JOIN reklet.purchase_orders po ON po.id=poi.purchase_order_id
+            WHERE poi.object_id=%s
+              AND po.status<>'cancelled'
+              AND poi.quantity_received<poi.quantity_ordered
+            GROUP BY poi.material_id
+        )
+        SELECT d.material_id,m.name AS material_name,u.name AS unit_name,
+               COALESCE(m.stock_quantity,0) AS stock_quantity,
+               COALESCE(d.required_quantity,0) AS required_quantity,
+               COALESCE(i.issued_quantity,0) AS issued_quantity,
+               COALESCE(c.consumed_quantity,0) AS consumed_quantity,
+               GREATEST(COALESCE(i.issued_quantity,0)-COALESCE(c.consumed_quantity,0),0) AS work_in_process_quantity,
+               COALESCE(r.quantity_reserved,0) AS reserved_quantity,
+               COALESCE(ar.total_reserved,0) AS total_reserved_quantity,
+               GREATEST(COALESCE(m.stock_quantity,0)-COALESCE(ar.total_reserved,0),0) AS available_quantity,
+               COALESCE(oo.ordered_outstanding,0) AS ordered_outstanding
+        FROM demand d
+        JOIN reklet.materials m ON m.id=d.material_id
+        LEFT JOIN reklet.units u ON u.id=m.unit_id
+        LEFT JOIN issued i ON i.material_id=d.material_id
+        LEFT JOIN consumed c ON c.material_id=d.material_id
+        LEFT JOIN reservations r ON r.material_id=d.material_id
+        LEFT JOIN all_reservations ar ON ar.material_id=d.material_id
+        LEFT JOIN open_orders oo ON oo.material_id=d.material_id
+        ORDER BY m.name
+        """,
+        (object_id,object_id,object_id,object_id,object_id),fetch=True
+    )
+    if df.empty:
+        return df
+    for col in ["stock_quantity","required_quantity","issued_quantity","consumed_quantity","work_in_process_quantity","reserved_quantity","total_reserved_quantity","available_quantity","ordered_outstanding"]:
+        df[col]=pd.to_numeric(df[col],errors="coerce").fillna(0.0)
+    df["remaining_need"]=(df["required_quantity"]-df["issued_quantity"]).clip(lower=0)
+    df["need_to_buy"]=(df["remaining_need"]-df["reserved_quantity"]-df["ordered_outstanding"]).clip(lower=0)
+    return df
 
 
 # ============================================================
@@ -1612,9 +1771,12 @@ elif menu == "Объекты":
                                             (SELECT COUNT(*) FROM reklet.finished_goods_transactions WHERE object_id=%s) AS finished_goods_transactions,
                                             (SELECT COUNT(*) FROM reklet.transport_transactions WHERE object_id=%s) AS transport_transactions,
                                             (SELECT COUNT(*) FROM reklet.installation_transactions WHERE object_id=%s) AS installation_transactions,
-                                            (SELECT COUNT(*) FROM reklet.material_transactions WHERE object_id=%s) AS material_transactions
+                                            (SELECT COUNT(*) FROM reklet.material_transactions WHERE object_id=%s) AS material_transactions,
+                                             (SELECT COUNT(*) FROM reklet.material_reservations WHERE object_id=%s) AS material_reservations,
+                                             (SELECT COUNT(*) FROM reklet.purchase_order_items WHERE object_id=%s) AS purchase_order_items,
+                                             (SELECT COUNT(*) FROM reklet.material_consumption WHERE object_id=%s) AS material_consumption
                                         """,
-                                        (object_id, object_id, object_id, object_id, object_id, object_id, object_id),
+                                        (object_id, object_id, object_id, object_id, object_id, object_id, object_id, object_id, object_id, object_id),
                                         fetch=True
                                     ).iloc[0]
 
@@ -1626,6 +1788,9 @@ elif menu == "Объекты":
                                         "transport_transactions": "история транспортировки",
                                         "installation_transactions": "история монтажа",
                                         "material_transactions": "движения материалов по объекту",
+                                         "material_reservations": "резерв материалов по объекту",
+                                         "purchase_order_items": "закупки материалов по объекту",
+                                         "material_consumption": "списание материалов в производстве",
                                     }
                                     blocking_refs = [
                                         label
@@ -3012,667 +3177,331 @@ elif menu == "Склад материалов":
 
     st.header("Склад материалов")
 
-    materials = get_materials_with_categories()
-    categories = get_material_categories()
-    category_map = {str(row["name"]): int(row["id"]) for _, row in categories.iterrows()}
-
-    # ========================================================
-    # НАВИГАЦИЯ СКЛАДА МАТЕРИАЛОВ
-    # ========================================================
-
     material_sections = [
         ("Перечень материалов", "list"),
         ("Добавить материал", "add"),
         ("Категории материалов", "categories"),
+        ("Потребность и резерв", "planning"),
+        ("Закупка материалов", "purchase"),
         ("Приход материалов", "receipt"),
-        ("Выдача материалов", "issue"),
+        ("Выдача материалов в производство", "issue"),
         ("Движение материалов", "movement"),
     ]
 
     if "material_section" not in st.session_state:
         st.session_state.material_section = "list"
 
-    nav_cols = st.columns(len(material_sections))
-    for col, (label, value) in zip(nav_cols, material_sections):
-        if col.button(label, key=f"material_nav_{value}", use_container_width=True):
-            st.session_state.material_section = value
-            st.rerun()
+    for start_idx in range(0,len(material_sections),3):
+        row=material_sections[start_idx:start_idx+3]
+        cols=st.columns(len(row),gap="small")
+        for col,(label,value) in zip(cols,row):
+            with col:
+                if st.button(label,key=f"material_nav_{start_idx}_{value}",use_container_width=True):
+                    st.session_state.material_section=value
+                    st.rerun()
 
-    active_material_section = st.session_state.material_section
+    active_material_section=st.session_state.material_section
+    materials=get_materials_with_categories()
+    categories=get_material_categories()
 
-    if active_material_section == "list":
+    def warehouse_select_object(prefix):
+        clients=get_clients(); objects=get_objects().sort_values("id",ascending=False).copy()
+        if clients.empty:
+            st.info("Заказчики отсутствуют."); return None,None
+        if objects.empty:
+            st.info("Объектов нет."); return None,None
+        client_rows=clients[["id","name"]].copy(); client_rows["name"]=client_rows["name"].fillna("").astype(str).str.strip(); client_rows=client_rows[client_rows["name"]!=""]
+        client_options=[f"{int(r['id'])} — {r['name']}" for _,r in client_rows.iterrows()]
+        selected_client=st.selectbox("Заказчик",["— Выберите заказчика —"]+client_options,key=f"{prefix}_customer")
+        if selected_client=="— Выберите заказчика —":
+            st.info("Сначала выберите заказчика."); return None,None
+        client_id=int(selected_client.split(" — ")[0])
+        client_objects=objects[pd.to_numeric(objects["client_id"],errors="coerce").eq(client_id)].copy()
+        if client_objects.empty:
+            st.info("У выбранного заказчика нет объектов."); return None,None
+        object_options=[f"{int(r['id'])} — {str(r['object_name'] or '').strip()}" for _,r in client_objects.iterrows()]
+        selected_object=st.selectbox("Объект",["— Выберите объект —"]+object_options,key=f"{prefix}_object_{client_id}")
+        if selected_object=="— Выберите объект —":
+            st.info("Теперь выберите объект."); return None,None
+        object_id=int(selected_object.split(" — ")[0])
+        row=client_objects[client_objects["id"]==object_id].iloc[0]
+        return object_id,row
 
-        # ========================================================
-        # MATERIAL LIST
-        # ========================================================
-
-        categories = get_material_categories()
-        category_map = {
-            str(row["name"]): int(row["id"])
-            for _, row in categories.iterrows()
-        }
-
+    if active_material_section=="list":
         st.subheader("Перечень материалов")
-
-        category_options = ["Все материалы", "Без категории"] + (
-            categories["name"].astype(str).tolist()
-            if not categories.empty else []
-        )
-
-        material_category_filter = st.selectbox(
-            "Отбор по категории",
-            category_options,
-            key="material_category_filter"
-        )
-
-        filtered_materials = materials.copy()
-
-        if material_category_filter == "Без категории":
-            filtered_materials = filtered_materials[
-                filtered_materials["category_id"].isna()
-            ].copy()
-        elif material_category_filter != "Все материалы":
-            filtered_materials = filtered_materials[
-                filtered_materials["category_name"].fillna("").astype(str).eq(
-                    material_category_filter
-                )
-            ].copy()
-
-        if filtered_materials.empty:
+        cat_options=["Все материалы","Без категории"]+(categories["name"].astype(str).tolist() if not categories.empty else [])
+        selected_cat=st.selectbox("Отбор по категории",cat_options,key="material_category_filter")
+        filtered=materials.copy()
+        if selected_cat=="Без категории": filtered=filtered[filtered["category_id"].isna()].copy()
+        elif selected_cat!="Все материалы": filtered=filtered[filtered["category_name"].fillna("").astype(str).eq(selected_cat)].copy()
+        if filtered.empty:
             st.info("Материалы по выбранному отбору отсутствуют.")
         else:
-            display = filtered_materials[
-                [
-                    "id",
-                    "name",
-                    "category_name",
-                    "unit_name",
-                    "cost_per_unit",
-                    "stock_quantity",
-                    "default_waste_coefficient"
-                ]
-            ].copy()
+            ra=run_query("SELECT material_id,COALESCE(SUM(quantity_reserved),0) AS reserved_quantity FROM reklet.material_reservations GROUP BY material_id",fetch=True)
+            rmap={safe_int(r["material_id"]):safe_float(r["reserved_quantity"]) for _,r in ra.iterrows()} if not ra.empty else {}
 
-            column_config = {
-                "id": st.column_config.NumberColumn("ID", disabled=True),
-                "name": st.column_config.TextColumn("Материал"),
-                "category_name": st.column_config.SelectboxColumn(
-                    "Категория",
-                    options=[""] + categories["name"].astype(str).tolist(),
-                    required=False
-                ),
-                "unit_name": st.column_config.TextColumn("Единица", disabled=True),
-                "cost_per_unit": st.column_config.NumberColumn("Цена за единицу", min_value=0.0, format="%.2f"),
-                "stock_quantity": st.column_config.NumberColumn("Остаток", min_value=0.0, format="%.4f"),
-                "default_waste_coefficient": st.column_config.NumberColumn("Коэффициент отходов", min_value=0.0, format="%.2f")
-            }
+            editor=filtered[["id","name","category_name","unit_name","cost_per_unit","stock_quantity","default_waste_coefficient"]].copy()
+            editor["reserved_quantity"]=editor["id"].map(rmap).fillna(0.0)
+            editor["available_quantity"]=(pd.to_numeric(editor["stock_quantity"],errors="coerce").fillna(0)-editor["reserved_quantity"]).clip(lower=0)
+            editor.columns=["ID","Материал","Категория","Единица","Цена за единицу","На складе","Зарезервировано","Доступно","Коэффициент отходов"]
 
-            edited = st.data_editor(
-                display,
+            edited=st.data_editor(
+                editor,
                 key="materials_editor",
                 width="stretch",
                 hide_index=True,
-                column_config=column_config,
-                disabled=["id", "unit_name"]
+                column_config={
+                    "ID":st.column_config.NumberColumn("ID",disabled=True),
+                    "Материал":st.column_config.TextColumn("Материал"),
+                    "Категория":st.column_config.SelectboxColumn("Категория",options=[""]+categories["name"].astype(str).tolist(),required=False),
+                    "Единица":st.column_config.TextColumn("Единица",disabled=True),
+                    "Цена за единицу":st.column_config.NumberColumn("Цена за единицу",min_value=0.0,format="%.2f"),
+                    "На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.4f"),
+                    "Зарезервировано":st.column_config.NumberColumn("Зарезервировано",disabled=True,format="%.4f"),
+                    "Доступно":st.column_config.NumberColumn("Доступно",disabled=True,format="%.4f"),
+                    "Коэффициент отходов":st.column_config.NumberColumn("Коэффициент отходов",min_value=0.0,format="%.2f")
+                },
+                disabled=["ID","Единица","На складе","Зарезервировано","Доступно"]
             )
+            print_view=edited.copy()
+            render_print_html("Перечень материалов",print_view,"print_material_list",subtitle=f"Категория: {selected_cat}")
 
-            render_print_html("Перечень материалов", display, "print_material_list", subtitle=f"Категория: {material_category_filter}")
-
-            if st.button(
-                "Сохранить изменения материалов",
-                key="save_materials"
-            ):
-                for _, row in edited.iterrows():
-                    cat_name = "" if pd.isna(row["category_name"]) else str(row["category_name"]).strip()
-                    cat_id = category_map.get(cat_name) if cat_name else None
-
-                    run_query(
-                        """
-                        UPDATE reklet.materials
-                        SET
-                            name = %s,
-                            category_id = %s,
-                            cost_per_unit = %s,
-                            stock_quantity = %s,
-                            default_waste_coefficient = %s
-                        WHERE id = %s
-                        """,
-                        (
-                            str(row["name"]).strip(),
-                            cat_id,
-                            safe_float(row["cost_per_unit"]),
-                            safe_float(row["stock_quantity"]),
-                            safe_float(row["default_waste_coefficient"], 1.20),
-                            safe_int(row["id"])
-                        )
-                    )
-
-                st.success("Изменения сохранены.")
-                st.rerun()
-
-
-    elif active_material_section == "add":
-
-        st.markdown("---")
-        st.subheader("Добавить материал")
-
-        units = run_query(
-            "SELECT id, name FROM reklet.units ORDER BY name",
-            fetch=True
-        )
-
-        unit_map = {
-            str(row["name"]): int(row["id"])
-            for _, row in units.iterrows()
-        } if not units.empty else {}
-
-        create_category_options = ["— Без категории —"] + (
-            categories["name"].astype(str).tolist()
-            if not categories.empty else []
-        )
-
-        with st.form("add_material_form"):
-            material_name = st.text_input("Название материала")
-
-            unit_name = (
-                st.selectbox("Единица измерения", list(unit_map.keys()))
-                if unit_map else None
-            )
-
-            create_category = st.selectbox(
-                "Категория",
-                create_category_options
-            )
-
-            cost = st.number_input(
-                "Цена за единицу",
-                min_value=0.0,
-                value=0.0,
-                format="%.2f"
-            )
-
-            stock = st.number_input(
-                "Начальный остаток",
-                min_value=0.0,
-                value=0.0,
-                format="%.4f"
-            )
-
-            waste = st.number_input(
-                "Коэффициент отходов",
-                min_value=0.0,
-                value=1.20,
-                format="%.2f"
-            )
-
-            submit = st.form_submit_button("Добавить материал")
-
-            if submit:
-                if not material_name.strip() or not unit_map:
-                    st.warning("Укажите название материала и единицу измерения.")
-                else:
-                    cat_id = (
-                        category_map.get(create_category)
-                        if create_category != "— Без категории —"
-                        else None
-                    )
-
-                    run_query(
-                        """
-                        INSERT INTO reklet.materials
-                        (
-                            name,
-                            unit_id,
-                            category_id,
-                            cost_per_unit,
-                            stock_quantity,
-                            default_waste_coefficient
-                        )
-                        VALUES (%s,%s,%s,%s,%s,%s)
-                        """,
-                        (
-                            material_name.strip(),
-                            unit_map[unit_name],
-                            cat_id,
-                            cost,
-                            stock,
-                            waste
-                        )
-                    )
-
-                    st.success("Материал добавлен.")
-                    st.rerun()
-
-
-    elif active_material_section == "categories":
-
-        st.markdown("---")
-        st.subheader("Категории материалов")
-
-        category_action = st.radio(
-            "Категории",
-            ["Добавить категорию", "Корректировать категорию", "Удалить категорию"],
-            horizontal=True,
-            key="category_action"
-        )
-
-        categories = get_material_categories()
-
-        if category_action == "Добавить категорию":
-            with st.form("add_material_category_form_new"):
-                new_category = st.text_input("Название категории")
-                add_category = st.form_submit_button("Добавить категорию")
-                if add_category:
-                    if not new_category.strip():
-                        st.warning("Укажите название категории.")
-                    else:
-                        try:
-                            run_query("INSERT INTO reklet.material_categories (name) VALUES (%s)", (new_category.strip(),))
-                            st.success("Категория добавлена.")
-                            st.rerun()
-                        except Exception:
-                            st.error("Не удалось добавить категорию. Возможно, такое название уже существует.")
-
-        elif category_action == "Корректировать категорию":
-            if categories.empty:
-                st.info("Категорий нет.")
-            else:
-                cat_map = {f"{r['id']} — {r['name']}": int(r['id']) for _, r in categories.iterrows()}
-                label = st.selectbox("Категория", list(cat_map.keys()), key="edit_category_select_new")
-                cat_id = cat_map[label]
-                current = categories[categories["id"] == cat_id].iloc[0]["name"]
-                with st.form("edit_category_form_new"):
-                    new_name = st.text_input("Новое название категории", value=str(current))
-                    save = st.form_submit_button("Сохранить категорию")
-                    if save:
-                        if not new_name.strip():
-                            st.warning("Название не может быть пустым.")
-                        else:
-                            try:
-                                run_query("UPDATE reklet.material_categories SET name=%s WHERE id=%s", (new_name.strip(), cat_id))
-                                st.success("Категория изменена.")
-                                st.rerun()
-                            except Exception:
-                                st.error("Не удалось изменить категорию. Возможно, такое название уже существует.")
-
-        else:
-            if categories.empty:
-                st.info("Категорий нет.")
-            else:
-                cat_map = {f"{r['id']} — {r['name']}": int(r['id']) for _, r in categories.iterrows()}
-                label = st.selectbox("Категория", list(cat_map.keys()), key="delete_category_select_new")
-                cat_id = cat_map[label]
-                st.warning("Удаление безопасное: категория, используемая материалами, не будет удалена.")
-                confirm = st.checkbox("Я подтверждаю удаление категории.", key="confirm_delete_category_new")
-                if st.button("Удалить категорию", key="delete_category_new", disabled=not confirm):
-                    used = run_query("SELECT COUNT(*) AS cnt FROM reklet.materials WHERE category_id=%s", (cat_id,), fetch=True)
-                    if int(used.iloc[0]["cnt"]) > 0:
-                        st.error("Удаление невозможно: категория используется материалами.")
-                    else:
-                        run_query("DELETE FROM reklet.material_categories WHERE id=%s", (cat_id,))
-                        st.success("Категория удалена.")
-                        st.rerun()
-
-
-    elif active_material_section == "receipt":
-
-        st.subheader("Приход материалов")
-        suppliers = get_suppliers()
-        supplier_options = ["Без поставщика"] + ([str(x) for x in suppliers["name"].tolist()] if not suppliers.empty else [])
-        supplier_map = {str(row["name"]): int(row["id"]) for _, row in suppliers.iterrows()} if not suppliers.empty else {}
-
-        receipt_category_options = ["Все категории", "Без категории"] + (
-            categories["name"].astype(str).tolist()
-            if not categories.empty else []
-        )
-        receipt_category_label = st.selectbox(
-            "Категория материала",
-            receipt_category_options,
-            key="receipt_category_batch"
-        )
-
-        receipt_materials = materials.copy()
-        if receipt_category_label == "Без категории":
-            receipt_materials = receipt_materials[
-                receipt_materials["category_id"].isna()
-            ].copy()
-        elif receipt_category_label != "Все категории":
-            receipt_materials = receipt_materials[
-                receipt_materials["category_name"].fillna("").astype(str).eq(
-                    receipt_category_label
-                )
-            ].copy()
-
-        receipt_df = receipt_materials[["id", "name", "unit_name"]].copy()
-        receipt_df.insert(0, "Выбрать", False)
-        receipt_df["Количество"] = 0.0
-        receipt_df["Цена"] = 0.0
-        receipt_df.columns = ["Выбрать", "ID", "Материал", "Единица", "Количество", "Цена"]
-
-        supplier_label = st.selectbox("Поставщик", supplier_options, key="receipt_supplier_batch")
-        edited_receipt = st.data_editor(
-            receipt_df, key="receipt_materials_editor", width="stretch", hide_index=True,
-            column_config={
-                "Выбрать": st.column_config.CheckboxColumn("Выбрать"),
-                "ID": st.column_config.NumberColumn("ID", disabled=True),
-                "Материал": st.column_config.TextColumn("Материал", disabled=True),
-                "Единица": st.column_config.TextColumn("Единица", disabled=True),
-                "Количество": st.column_config.NumberColumn("Количество", min_value=0.0, step=0.001, format="%.4f"),
-                "Цена": st.column_config.NumberColumn("Цена", min_value=0.0, step=0.01, format="%.2f"),
-            }, disabled=["ID", "Материал", "Единица"]
-        )
-
-        if st.button("Выполнить приход", key="execute_receipt_batch", use_container_width=True):
-            selected = edited_receipt[edited_receipt["Выбрать"].fillna(False) & (edited_receipt["Количество"].fillna(0).astype(float) > 0)]
-            if selected.empty:
-                st.warning("Выберите материалы и укажите количество.")
-            else:
-                supplier_id = supplier_map.get(supplier_label)
+            if st.button("Сохранить изменения материалов",key="save_materials"):
+                cmap={str(r["name"]):int(r["id"]) for _,r in categories.iterrows()}
                 statements=[]
-                for _, row in selected.iterrows():
-                    material_id=safe_int(row["ID"]); qty=safe_float(row["Количество"]); price=safe_float(row["Цена"])
+                for _,row in edited.iterrows():
+                    cat_name="" if pd.isna(row["Категория"]) else str(row["Категория"]).strip()
                     statements.append((
-                        """INSERT INTO reklet.material_transactions (material_id,supplier_id,operation_type,quantity,unit_price,transaction_type) VALUES (%s,%s,'purchase',%s,%s,'IN')""",
-                        (material_id,supplier_id,qty,price)
+                        "UPDATE reklet.materials SET name=%s,category_id=%s,cost_per_unit=%s,default_waste_coefficient=%s WHERE id=%s",
+                        (str(row["Материал"]).strip(),cmap.get(cat_name) if cat_name else None,safe_float(row["Цена за единицу"]),safe_float(row["Коэффициент отходов"],1.20),safe_int(row["ID"]))
                     ))
-                    statements.append((
-                        "UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)+%s WHERE id=%s",
-                        (qty,material_id)
-                    ))
-                    if supplier_id:
-                        statements.append((
-                            """INSERT INTO reklet.material_suppliers (material_id,supplier_id,purchase_price) VALUES (%s,%s,%s) ON CONFLICT (material_id,supplier_id) DO UPDATE SET purchase_price=EXCLUDED.purchase_price""",
-                            (material_id,supplier_id,price)
-                        ))
                 run_transaction(statements)
-                st.success(f"Приход выполнен: {len(selected)} поз.")
+                st.success("Изменения сохранены. Остатки склада не изменялись.")
+                st.session_state.pop("materials_editor",None)
                 st.rerun()
 
-        receipt_history = run_query(
-            """
-            SELECT mt.created_at AS "Дата", s.name AS "Поставщик", m.name AS "Материал",
-                   u.name AS "Единица", mt.quantity AS "Количество", mt.unit_price AS "Цена",
-                   (mt.quantity * COALESCE(mt.unit_price,0)) AS "Сумма"
-            FROM reklet.material_transactions mt
-            LEFT JOIN reklet.suppliers s ON s.id=mt.supplier_id
-            JOIN reklet.materials m ON m.id=mt.material_id
-            LEFT JOIN reklet.units u ON u.id=m.unit_id
-            WHERE mt.operation_type='purchase' AND mt.transaction_type='IN'
-            ORDER BY mt.created_at DESC
-            LIMIT 500
-            """, fetch=True
-        )
-        st.markdown("---")
-        st.subheader("История прихода материалов")
-        if receipt_history.empty:
-            st.info("Истории прихода пока нет.")
-        else:
-            st.dataframe(receipt_history, width="stretch", hide_index=True)
-            render_print_html("Ведомость прихода материалов", receipt_history, "print_material_receipt_history")
-
-    elif active_material_section == "issue":
-        st.subheader("Выдача материалов в производство")
-        objects = get_objects()
-        if materials.empty or objects.empty:
-            st.info("Нужны материалы и объекты.")
-        else:
-            object_options = {
-                f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}": int(r['id'])
-                for _,r in objects.sort_values("id",ascending=False).iterrows()
-            }
-            object_label = st.selectbox(
-                "Объект",
-                list(object_options.keys()),
-                key="issue_object_batch"
-            )
-            object_id = object_options[object_label]
-
-            # Потребность материалов по выбранному объекту:
-            # сумма по всем изделиям объекта: количество изделия × норма материала × коэффициент отходов.
-            demand = run_query(
-                """
-                SELECT
-                    ptm.material_id,
-                    SUM(
-                        COALESCE(oi.quantity_needed, 0)
-                        * COALESCE(ptm.quantity_per_unit, 0)
-                        * COALESCE(ptm.waste_coefficient, 1)
-                    ) AS required_quantity
-                FROM reklet.object_items oi
-                JOIN reklet.product_template_materials ptm
-                  ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
-                WHERE oi.object_id=%s
-                  AND COALESCE(oi.quantity_needed,0) > 0
-                  AND COALESCE(oi.qty_installed,0) < COALESCE(oi.quantity_needed,0)
-                GROUP BY ptm.material_id
-                """,
-                (object_id,),fetch=True
-            )
-            demand_map = {}
-            if not demand.empty:
-                demand_map = {
-                    safe_int(r["material_id"]): safe_float(r["required_quantity"])
-                    for _, r in demand.iterrows()
-                }
-            required_ids = set(demand_map.keys())
-
-            # Сколько материала уже выдано в производство именно этому объекту.
-            issued = run_query(
-                """
-                SELECT
-                    material_id,
-                    COALESCE(SUM(quantity),0) AS issued_quantity
-                FROM reklet.material_transactions
-                WHERE object_id=%s
-                  AND operation_type='production_transfer'
-                  AND transaction_type='OUT'
-                GROUP BY material_id
-                """,
-                (object_id,),
-                fetch=True
-            )
-            issued_map = {}
-            if not issued.empty:
-                issued_map = {
-                    safe_int(r["material_id"]): safe_float(r["issued_quantity"])
-                    for _, r in issued.iterrows()
-                }
-
-            material_scope = st.selectbox(
-                "Материалы для выбранного объекта",
-                ["Все материалы","Только необходимые для объекта"],
-                key="issue_material_scope"
-            )
-
-            issue_materials = materials.copy()
-            if material_scope == "Только необходимые для объекта":
-                issue_materials = issue_materials[issue_materials["id"].isin(required_ids)].copy()
-                if issue_materials.empty:
-                    st.info("Для выбранного объекта по спецификациям материалов потребности нет.")
-            if not issue_materials.empty:
-                issue_df=issue_materials[["id","name","unit_name","stock_quantity"]].copy()
-                issue_df["required_quantity"] = issue_df["id"].map(demand_map).fillna(0.0)
-                issue_df["issued_quantity"] = issue_df["id"].map(issued_map).fillna(0.0)
-                issue_df.insert(0,"Выбрать",False)
-                issue_df["Выдать"]=0.0
-                issue_df.columns=["Выбрать","ID","Материал","Единица","На складе","Потребность объекта","Выдано","Выдать"]
-                with st.form(f"issue_materials_form_{object_id}",clear_on_submit=False):
-                    edited_issue=st.data_editor(
-                        issue_df,key=f"issue_materials_editor_{object_id}_{material_scope}",
-                        width="stretch",hide_index=True,
-                        column_config={
-                            "Выбрать":st.column_config.CheckboxColumn("Выбрать"),
-                            "ID":st.column_config.NumberColumn("ID",disabled=True),
-                            "Материал":st.column_config.TextColumn("Материал",disabled=True),
-                            "Единица":st.column_config.TextColumn("Единица",disabled=True),
-                            "На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.4f"),
-                            "Потребность объекта":st.column_config.NumberColumn("Потребность объекта",disabled=True,format="%.4f"),
-                            "Выдано":st.column_config.NumberColumn("Выдано",disabled=True,format="%.4f"),
-                            "Выдать":st.column_config.NumberColumn("Выдать",min_value=0.0,step=0.001,format="%.4f")
-                        },
-                        disabled=["ID","Материал","Единица","На складе","Потребность объекта","Выдано"]
-                    )
-                    execute_issue=st.form_submit_button("Выполнить выдачу в производство",use_container_width=True)
-                issue_print = edited_issue[[
-                    "ID", "Материал", "Единица", "На складе",
-                    "Потребность объекта", "Выдано"
-                ]].copy()
-                issue_print["Осталось выдать"] = (
-                    pd.to_numeric(issue_print["Потребность объекта"], errors="coerce").fillna(0)
-                    - pd.to_numeric(issue_print["Выдано"], errors="coerce").fillna(0)
-                ).clip(lower=0)
-                render_print_html(
-                    "Ведомость выдачи материалов в производство",
-                    issue_print,
-                    f"print_material_issue_{object_id}",
-                    subtitle=f"Объект: {object_label}"
-                )
-
-                if execute_issue:
-                    selected=edited_issue[
-                        edited_issue["Выбрать"].fillna(False) &
-                        (edited_issue["Выдать"].fillna(0).astype(float)>0)
-                    ]
-                    if selected.empty:
-                        st.warning("Выберите материалы и укажите количество.")
-                    elif any(safe_float(r["Выдать"])>safe_float(r["На складе"]) for _,r in selected.iterrows()):
-                        st.error("Нельзя выдать больше, чем есть на складе.")
-                    else:
-                        statements=[]
-                        for _,r in selected.iterrows():
-                            mid=safe_int(r["ID"]); qty=safe_float(r["Выдать"])
-                            statements.extend([
-                                ("INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')",(mid,object_id,qty)),
-                                ("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",(qty,mid))
-                            ])
-                        run_transaction(statements)
-                        st.success(f"Выдача выполнена: {len(selected)} поз.")
-                        st.rerun()
-
-    elif active_material_section == "supplier_search":
-        st.subheader("Поставщики материала")
-        all_materials = get_materials_with_categories()
-        if all_materials.empty:
-            st.info("Материалов нет.")
-        else:
-            categories = get_material_categories()
-            category_options = ["Все категории","Без категории"] + (
-                categories["name"].astype(str).tolist() if not categories.empty else []
-            )
-            category = st.selectbox(
-                "Категория материала",
-                category_options,
-                key="supplier_search_material_category"
-            )
-            filtered = all_materials.copy()
-            if category == "Без категории":
-                filtered = filtered[filtered["category_id"].isna()].copy()
-            elif category != "Все категории":
-                filtered = filtered[
-                    filtered["category_name"].fillna("").astype(str).eq(category)
-                ].copy()
-
-            if filtered.empty:
-                st.info("В выбранной категории материалов нет.")
-            else:
-                material_map = {
-                    f"{int(r['id'])} — {r['name']}": int(r['id'])
-                    for _,r in filtered.sort_values("name").iterrows()
-                }
-                selected_material = st.selectbox(
-                    "Материал",
-                    list(material_map.keys()),
-                    key="supplier_search_material"
-                )
-                material_id = material_map[selected_material]
-                suppliers_for_material = run_query(
-                    """
-                    SELECT
-                        s.id,
-                        s.name AS supplier,
-                        ms.purchase_price,
-                        ms.supplier_code,
-                        ms.conditions,
-                        ms.is_preferred
-                    FROM reklet.material_suppliers ms
-                    JOIN reklet.suppliers s ON s.id=ms.supplier_id
-                    WHERE ms.material_id=%s
-                    ORDER BY s.name
-                    """,
-                    (material_id,),fetch=True
-                )
-                if suppliers_for_material.empty:
-                    st.info("Для этого материала поставщики не назначены.")
+    elif active_material_section=="add":
+        st.subheader("Добавить материал")
+        units=run_query("SELECT id,name FROM reklet.units ORDER BY name",fetch=True); unit_map={str(r["name"]):int(r["id"]) for _,r in units.iterrows()} if not units.empty else {}
+        cat_options=["— Без категории —"]+(categories["name"].astype(str).tolist() if not categories.empty else [])
+        with st.form("add_material_form"):
+            name=st.text_input("Название материала")
+            unit=st.selectbox("Единица измерения",list(unit_map.keys())) if unit_map else None
+            cat=st.selectbox("Категория",cat_options)
+            price=st.number_input("Цена за единицу",min_value=0.0,value=0.0,format="%.2f")
+            stock=st.number_input("Начальный остаток",min_value=0.0,value=0.0,format="%.4f")
+            waste=st.number_input("Коэффициент отходов",min_value=0.0,value=1.20,format="%.2f")
+            submit=st.form_submit_button("Добавить материал")
+            if submit:
+                if not name.strip() or not unit_map: st.warning("Укажите название материала и единицу измерения.")
                 else:
-                    view=suppliers_for_material.copy()
-                    view.columns=["ID","Поставщик","Цена","Код поставщика","Условия","Предпочтительный"]
-                    st.dataframe(view,width="stretch",hide_index=True)
+                    cmap={str(r["name"]):int(r["id"]) for _,r in categories.iterrows()}; cid=cmap.get(cat) if cat!="— Без категории —" else None
+                    run_query("INSERT INTO reklet.materials(name,unit_id,category_id,cost_per_unit,stock_quantity,default_waste_coefficient) VALUES (%s,%s,%s,%s,%s,%s)",(name.strip(),unit_map[unit],cid,price,stock,waste)); st.success("Материал добавлен."); st.rerun()
 
-    elif active_material_section == "movement":
+    elif active_material_section=="categories":
+        st.subheader("Категории материалов")
+        action=st.radio("Категории",["Добавить категорию","Корректировать категорию","Удалить категорию"],horizontal=True,key="category_action"); categories=get_material_categories()
+        if action=="Добавить категорию":
+            with st.form("add_material_category_form_new"):
+                new=st.text_input("Название категории")
+                if st.form_submit_button("Добавить категорию"):
+                    if not new.strip(): st.warning("Укажите название категории.")
+                    else:
+                        try: run_query("INSERT INTO reklet.material_categories(name) VALUES (%s)",(new.strip(),)); st.success("Категория добавлена."); st.rerun()
+                        except Exception: st.error("Не удалось добавить категорию. Возможно, такое название уже существует.")
+        elif action=="Корректировать категорию":
+            if categories.empty: st.info("Категорий нет.")
+            else:
+                cmap={f"{r['id']} — {r['name']}":int(r['id']) for _,r in categories.iterrows()}; label=st.selectbox("Категория",list(cmap.keys()),key="edit_category_select_new"); cid=cmap[label]; current=str(categories[categories["id"]==cid].iloc[0]["name"])
+                with st.form("edit_category_form_new"):
+                    new=st.text_input("Новое название категории",value=current)
+                    if st.form_submit_button("Сохранить категорию"):
+                        if not new.strip(): st.warning("Название не может быть пустым.")
+                        else:
+                            try: run_query("UPDATE reklet.material_categories SET name=%s WHERE id=%s",(new.strip(),cid)); st.success("Категория сохранена."); st.rerun()
+                            except Exception: st.error("Не удалось сохранить категорию.")
+        else:
+            if categories.empty: st.info("Категорий нет.")
+            else:
+                cmap={f"{r['id']} — {r['name']}":int(r['id']) for _,r in categories.iterrows()}; label=st.selectbox("Категория",list(cmap.keys()),key="delete_material_category"); cid=cmap[label]; confirm=st.checkbox("Подтверждаю удаление категории.",key="confirm_delete_category")
+                if st.button("Удалить категорию",key="delete_category_button",disabled=not confirm):
+                    refs=run_query("SELECT COUNT(*) AS n FROM reklet.materials WHERE category_id=%s",(cid,),fetch=True).iloc[0]["n"]
+                    if int(refs)>0: st.error("Удаление запрещено: категория используется материалами.")
+                    else:
+                        try: run_query("DELETE FROM reklet.material_categories WHERE id=%s",(cid,)); st.success("Категория удалена."); st.rerun()
+                        except Exception as e: st.error("Удаление не выполнено."); st.code(str(e))
 
-        # ========================================================
-        # MOVEMENT HISTORY
-        # ========================================================
+    elif active_material_section=="planning":
+        st.subheader("Потребность и резерв материалов")
+        object_id,object_row=warehouse_select_object("material_planning")
+        if object_id is not None:
+            planning=get_object_material_planning(object_id)
+            if planning.empty: st.info("Для выбранного объекта нет потребности в материалах по спецификациям.")
+            else:
+                view=planning[["material_name","unit_name","required_quantity","issued_quantity","work_in_process_quantity","remaining_need","stock_quantity","reserved_quantity","available_quantity","ordered_outstanding","need_to_buy"]].copy(); view.columns=["Материал","Единица","Потребность","Выдано в производство","В производстве","Осталось потребно","На складе","Зарезервировано","Доступно","Ожидается","Нужно купить"]
+                st.dataframe(view,width="stretch",hide_index=True); render_print_html(f"Потребность и резерв — {object_row['object_name']}",view,f"print_material_planning_{object_id}",subtitle=f"Заказчик: {object_row['client_name']}")
+                action_df=planning[["material_id","material_name","unit_name","remaining_need","stock_quantity","reserved_quantity","available_quantity"]].copy(); action_df.insert(0,"Выбрать",False); action_df["Зарезервировать"]=0.0; action_df["Снять резерв"]=0.0; action_df.columns=["Выбрать","ID","Материал","Единица","Осталось потребно","На складе","Зарезервировано","Доступно","Зарезервировать","Снять резерв"]
+                with st.form(f"material_reservation_form_{object_id}",clear_on_submit=False):
+                    edited=st.data_editor(action_df,key=f"material_reservation_editor_{object_id}",width="stretch",hide_index=True,column_config={"Выбрать":st.column_config.CheckboxColumn("Выбрать"),"ID":st.column_config.NumberColumn("ID",disabled=True),"Материал":st.column_config.TextColumn("Материал",disabled=True),"Единица":st.column_config.TextColumn("Единица",disabled=True),"Осталось потребно":st.column_config.NumberColumn("Осталось потребно",disabled=True,format="%.4f"),"На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.4f"),"Зарезервировано":st.column_config.NumberColumn("Зарезервировано",disabled=True,format="%.4f"),"Доступно":st.column_config.NumberColumn("Доступно",disabled=True,format="%.4f"),"Зарезервировать":st.column_config.NumberColumn("Зарезервировать",min_value=0.0,step=0.001,format="%.4f"),"Снять резерв":st.column_config.NumberColumn("Снять резерв",min_value=0.0,step=0.001,format="%.4f")},disabled=["ID","Материал","Единица","Осталось потребно","На складе","Зарезервировано","Доступно"])
+                    execute=st.form_submit_button("Выполнить",use_container_width=True)
+                if execute:
+                    selected=edited[edited["Выбрать"].fillna(False)&((edited["Зарезервировать"].fillna(0)>0)|(edited["Снять резерв"].fillna(0)>0))].copy(); errors=[]; statements=[]
+                    for _,row in selected.iterrows():
+                        mid=safe_int(row["ID"]); add=safe_float(row["Зарезервировать"]); release=safe_float(row["Снять резерв"]); rem=safe_float(row["Осталось потребно"]); res=safe_float(row["Зарезервировано"]); avail=safe_float(row["Доступно"])
+                        if add>0 and release>0: errors.append(f"{row['Материал']}: задайте только резерв или снятие резерва."); continue
+                        if add>max(rem-res,0)+1e-9: errors.append(f"{row['Материал']}: можно зарезервировать максимум {max(rem-res,0):.4f}.")
+                        if add>avail+1e-9: errors.append(f"{row['Материал']}: доступно только {avail:.4f}.")
+                        if release>res+1e-9: errors.append(f"{row['Материал']}: текущий резерв только {res:.4f}.")
+                        if add>0: statements.append(("INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved) VALUES (%s,%s,%s) ON CONFLICT(object_id,material_id) DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,updated_at=timezone('utc'::text,now())",(object_id,mid,add)))
+                        elif release>0: statements.append(("UPDATE reklet.material_reservations SET quantity_reserved=quantity_reserved-%s,updated_at=timezone('utc'::text,now()) WHERE object_id=%s AND material_id=%s",(release,object_id,mid)))
+                    statements.append(("DELETE FROM reklet.material_reservations WHERE object_id=%s AND quantity_reserved<=0",(object_id,)))
+                    if selected.empty: st.info("Выберите материал и укажите количество.")
+                    elif errors: st.error("Резерв не изменён:\n"+"\n".join(errors))
+                    else: run_transaction(statements); st.success("Резерв материалов обновлён."); st.session_state.pop(f"material_reservation_editor_{object_id}",None); st.rerun()
+
+    elif active_material_section=="purchase":
+        st.subheader("Закупка материалов")
+        object_id,object_row=warehouse_select_object("material_purchase")
+        if object_id is not None:
+            planning=get_object_material_planning(object_id); need=planning[planning["need_to_buy"]>0.0000001].copy()
+            if need.empty: st.success("Для выбранного объекта сейчас закупать нечего.")
+            else:
+                links=run_query("SELECT ms.material_id,s.id AS supplier_id,s.name AS supplier_name,ms.purchase_price,ms.is_preferred FROM reklet.material_suppliers ms JOIN reklet.suppliers s ON s.id=ms.supplier_id ORDER BY ms.material_id,ms.is_preferred DESC,s.name",fetch=True)
+                rows=[]; missing=[]
+                for _,n in need.iterrows():
+                    mid=safe_int(n["material_id"]); matches=links[links["material_id"].eq(mid)].copy() if not links.empty else pd.DataFrame()
+                    if matches.empty:
+                        missing.append(str(n["material_name"])); rows.append({"Выбрать":False,"ID":mid,"Материал":n["material_name"],"Нужно купить":safe_float(n["need_to_buy"]),"Поставщик":"— нет поставщика —","Цена":0.0,"Купить":0.0,"supplier_id":None})
+                    else:
+                        for _,sr in matches.sort_values(["is_preferred","supplier_name"],ascending=[False,True]).iterrows(): rows.append({"Выбрать":False,"ID":mid,"Материал":n["material_name"],"Нужно купить":safe_float(n["need_to_buy"]),"Поставщик":sr["supplier_name"],"Цена":safe_float(sr["purchase_price"]),"Купить":0.0,"supplier_id":safe_int(sr["supplier_id"])})
+                pdf=pd.DataFrame(rows)
+                if missing: st.warning("Нет назначенного поставщика для: "+", ".join(missing))
+                editor=pdf[["Выбрать","ID","Материал","Нужно купить","Поставщик","Цена","Купить"]].copy()
+                with st.form(f"purchase_form_{object_id}",clear_on_submit=False):
+                    edited=st.data_editor(editor,key=f"purchase_editor_{object_id}",width="stretch",hide_index=True,column_config={"Выбрать":st.column_config.CheckboxColumn("Выбрать"),"ID":st.column_config.NumberColumn("ID",disabled=True),"Материал":st.column_config.TextColumn("Материал",disabled=True),"Нужно купить":st.column_config.NumberColumn("Нужно купить",disabled=True,format="%.4f"),"Поставщик":st.column_config.TextColumn("Поставщик",disabled=True),"Цена":st.column_config.NumberColumn("Цена",disabled=True,format="%.2f"),"Купить":st.column_config.NumberColumn("Купить",min_value=0.0,step=0.001,format="%.4f")},disabled=["ID","Материал","Нужно купить","Поставщик","Цена"])
+                    create=st.form_submit_button("Сформировать закупку",use_container_width=True)
+                pending_key=f"material_purchase_pending_{object_id}"
+                if create:
+                    selected=edited[edited["Выбрать"].fillna(False)&(edited["Купить"].fillna(0)>0)].copy(); lines=[]; errors=[]
+                    for idx,row in selected.iterrows():
+                        sid=pdf.iloc[int(idx)].get("supplier_id")
+                        if sid is None: errors.append(f"{row['Материал']}: поставщик не назначен."); continue
+                        lines.append({"material_id":safe_int(row["ID"]),"material_name":str(row["Материал"]),"supplier_id":safe_int(sid),"supplier_name":str(row["Поставщик"]),"quantity":safe_float(row["Купить"]),"unit_price":safe_float(row["Цена"]),"need_to_buy":safe_float(row["Нужно купить"])})
+                    totals={}
+                    for line in lines: totals[line["material_id"]]=totals.get(line["material_id"],0)+line["quantity"]
+                    for mid,total in totals.items():
+                        req=safe_float(need.loc[need["material_id"].eq(mid),"need_to_buy"].iloc[0])
+                        if total+1e-9<req: errors.append(f"{need.loc[need['material_id'].eq(mid),'material_name'].iloc[0]}: закупка {total:.4f}, необходимо {req:.4f}. Потребность останется незакрытой.")
+                    if not lines: st.warning("Выберите поставщика и укажите количество.")
+                    else: st.session_state[pending_key]={"object_id":object_id,"object_name":str(object_row["object_name"]),"warnings":errors,"lines":lines}
+                pending=st.session_state.get(pending_key)
+                if pending:
+                    st.markdown("---"); st.subheader("Подтверждение закупки")
+                    if pending["warnings"]: st.warning("\n".join(pending["warnings"]))
+                    cdf=pd.DataFrame(pending["lines"])[["material_name","supplier_name","quantity","unit_price"]].copy(); cdf.columns=["Материал","Поставщик","Количество","Цена"]; st.dataframe(cdf,width="stretch",hide_index=True)
+                    c1,c2=st.columns(2)
+                    with c1: confirm=st.button("Подтвердить закупку",key=f"confirm_purchase_{object_id}",use_container_width=True)
+                    with c2: cancel=st.button("Отмена",key=f"cancel_purchase_{object_id}",use_container_width=True)
+                    if confirm:
+                        grouped={}
+                        for line in pending["lines"]: grouped.setdefault(line["supplier_id"],[]).append(line)
+                        statements=[]
+                        for sid,ls in grouped.items():
+                            values=[]; params=[sid,f"Закупка для объекта: {pending['object_name']}"]
+                            for line in ls: values.append("(%s,%s,%s,0,%s)"); params.extend([pending["object_id"],line["material_id"],line["quantity"],line["unit_price"]])
+                            sql=f"""WITH new_po AS (INSERT INTO reklet.purchase_orders(supplier_id,status,notes) VALUES (%s,'ordered',%s) RETURNING id) INSERT INTO reklet.purchase_order_items(purchase_order_id,object_id,material_id,quantity_ordered,quantity_received,unit_price) SELECT new_po.id,x.object_id,x.material_id,x.quantity_ordered,x.quantity_received,x.unit_price FROM new_po CROSS JOIN (VALUES {', '.join(values)}) AS x(object_id,material_id,quantity_ordered,quantity_received,unit_price)"""
+                            statements.append((sql,tuple(params)))
+                        run_transaction(statements); st.session_state.pop(pending_key,None); st.session_state.pop(f"purchase_editor_{object_id}",None); st.success("Закупка создана. Материалы ожидаются до прихода."); st.rerun()
+                    if cancel: st.session_state.pop(pending_key,None); st.rerun()
+                st.markdown("---"); st.subheader("История закупок")
+                history=run_query("""SELECT po.id AS \"№ закупки\",po.order_date AS \"Дата\",CASE po.status WHEN 'ordered' THEN 'Заказан' WHEN 'partial' THEN 'Частично получен' WHEN 'received' THEN 'Получен' WHEN 'cancelled' THEN 'Отменён' ELSE po.status END AS \"Статус\",s.name AS \"Поставщик\",c.name AS \"Заказчик\",o.object_name AS \"Объект\",m.name AS \"Материал\",poi.quantity_ordered AS \"Заказано\",poi.quantity_received AS \"Получено\",GREATEST(poi.quantity_ordered-poi.quantity_received,0) AS \"Осталось\",poi.unit_price AS \"Цена\" FROM reklet.purchase_order_items poi JOIN reklet.purchase_orders po ON po.id=poi.purchase_order_id JOIN reklet.suppliers s ON s.id=po.supplier_id JOIN reklet.objects o ON o.id=poi.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id JOIN reklet.materials m ON m.id=poi.material_id WHERE poi.object_id=%s ORDER BY po.id DESC,m.name LIMIT 500""",(object_id,),fetch=True)
+                if not history.empty: st.dataframe(history,width="stretch",hide_index=True); render_print_html(f"История закупок — {object_row['object_name']}",history,f"print_purchase_history_{object_id}")
+
+    elif active_material_section=="receipt":
+        st.subheader("Приход материалов")
+        openp=run_query("""SELECT poi.id AS purchase_item_id,po.id AS purchase_order_id,s.id AS supplier_id,s.name AS supplier_name,o.id AS object_id,o.object_name,c.name AS client_name,m.id AS material_id,m.name AS material_name,u.name AS unit_name,poi.quantity_ordered,poi.quantity_received,GREATEST(poi.quantity_ordered-poi.quantity_received,0) AS remaining_quantity,poi.unit_price FROM reklet.purchase_order_items poi JOIN reklet.purchase_orders po ON po.id=poi.purchase_order_id JOIN reklet.suppliers s ON s.id=po.supplier_id JOIN reklet.objects o ON o.id=poi.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id JOIN reklet.materials m ON m.id=poi.material_id LEFT JOIN reklet.units u ON u.id=m.unit_id WHERE po.status<>'cancelled' AND poi.quantity_received<poi.quantity_ordered ORDER BY po.id DESC,o.object_name,m.name LIMIT 500""",fetch=True)
+        if openp.empty: st.info("Ожидающих закупок для прихода нет.")
+        else:
+            edf=openp[["purchase_item_id","purchase_order_id","supplier_name","client_name","object_name","material_name","unit_name","quantity_ordered","quantity_received","remaining_quantity","unit_price"]].copy(); edf.insert(0,"Выбрать",False); edf["Принять"]=0.0; edf.columns=["Выбрать","ID позиции","№ закупки","Поставщик","Заказчик","Объект","Материал","Единица","Заказано","Получено","Осталось","Цена","Принять"]
+            with st.form("purchase_receipt_form",clear_on_submit=False):
+                edited=st.data_editor(edf,key="purchase_receipt_editor",width="stretch",hide_index=True,column_config={"Выбрать":st.column_config.CheckboxColumn("Выбрать"),"ID позиции":st.column_config.NumberColumn("ID позиции",disabled=True),"№ закупки":st.column_config.NumberColumn("№ закупки",disabled=True),"Поставщик":st.column_config.TextColumn("Поставщик",disabled=True),"Заказчик":st.column_config.TextColumn("Заказчик",disabled=True),"Объект":st.column_config.TextColumn("Объект",disabled=True),"Материал":st.column_config.TextColumn("Материал",disabled=True),"Единица":st.column_config.TextColumn("Единица",disabled=True),"Заказано":st.column_config.NumberColumn("Заказано",disabled=True,format="%.4f"),"Получено":st.column_config.NumberColumn("Получено",disabled=True,format="%.4f"),"Осталось":st.column_config.NumberColumn("Осталось",disabled=True,format="%.4f"),"Цена":st.column_config.NumberColumn("Цена",disabled=True,format="%.2f"),"Принять":st.column_config.NumberColumn("Принять",min_value=0.0,step=0.001,format="%.4f")},disabled=["ID позиции","№ закупки","Поставщик","Заказчик","Объект","Материал","Единица","Заказано","Получено","Осталось","Цена"])
+                execute=st.form_submit_button("Оформить приход",use_container_width=True)
+            if execute:
+                selected=edited[edited["Выбрать"].fillna(False)&(edited["Принять"].fillna(0)>0)].copy(); errors=[]; statements=[]; groups={}
+                for idx,row in selected.iterrows():
+                    qty=safe_float(row["Принять"]); rem=safe_float(row["Осталось"]); raw=openp.loc[int(idx)];
+                    if qty>rem+1e-9: errors.append(f"{row['Материал']} / закупка №{safe_int(row['№ закупки'])}: можно принять максимум {rem:.4f}.")
+                    key=(safe_int(raw["object_id"]),safe_int(raw["material_id"])); groups[key]=groups.get(key,0)+qty
+                caches={}; auto={}
+                for (oid,mid),total in groups.items():
+                    if oid not in caches: caches[oid]=get_object_material_planning(oid)
+                    m=caches[oid]; match=m[m["material_id"].eq(mid)]
+                    auto[(oid,mid)]=min(total,max(safe_float(match.iloc[0]["remaining_need"])-safe_float(match.iloc[0]["reserved_quantity"]),0.0)) if not match.empty else 0.0
+                for idx,row in selected.iterrows():
+                    raw=openp.loc[int(idx)]; qty=safe_float(row["Принять"])
+                    statements.extend([("INSERT INTO reklet.material_transactions(material_id,supplier_id,object_id,operation_type,quantity,unit_price,transaction_type) VALUES (%s,%s,%s,'purchase',%s,%s,'IN')",(safe_int(raw["material_id"]),safe_int(raw["supplier_id"]),safe_int(raw["object_id"]),qty,safe_float(raw["unit_price"]))),("UPDATE reklet.purchase_order_items SET quantity_received=quantity_received+%s WHERE id=%s",(qty,safe_int(raw["purchase_item_id"]))),("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)+%s WHERE id=%s",(qty,safe_int(raw["material_id"])))])
+                for (oid,mid),qty in auto.items():
+                    if qty>0: statements.append(("INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved) VALUES (%s,%s,%s) ON CONFLICT(object_id,material_id) DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,updated_at=timezone('utc'::text,now())",(oid,mid,qty)))
+                for po_id in sorted({safe_int(openp.loc[int(i),"purchase_order_id"]) for i in selected.index}): statements.append(("""UPDATE reklet.purchase_orders po SET status=CASE WHEN NOT EXISTS(SELECT 1 FROM reklet.purchase_order_items poi WHERE poi.purchase_order_id=po.id AND poi.quantity_received<poi.quantity_ordered) THEN 'received' WHEN EXISTS(SELECT 1 FROM reklet.purchase_order_items poi WHERE poi.purchase_order_id=po.id AND poi.quantity_received>0) THEN 'partial' ELSE 'ordered' END WHERE po.id=%s""",(po_id,)))
+                if selected.empty: st.warning("Выберите позиции и укажите количество принятого материала.")
+                elif errors: st.error("Приход не выполнен:\n"+"\n".join(errors))
+                else: run_transaction(statements); st.success("Приход оформлен. При необходимости материал автоматически зарезервирован за объектом."); st.session_state.pop("purchase_receipt_editor",None); st.rerun()
 
         st.markdown("---")
+        with st.expander("Приход без предварительной закупки"):
+            suppliers=get_suppliers(); smap={str(r["name"]):int(r["id"]) for _,r in suppliers.iterrows()} if not suppliers.empty else {}
+            cat_options=["Все категории","Без категории"]+(categories["name"].astype(str).tolist() if not categories.empty else []); cat=st.selectbox("Категория материала",cat_options,key="manual_receipt_category"); manual=materials.copy()
+            if cat=="Без категории": manual=manual[manual["category_id"].isna()].copy()
+            elif cat!="Все категории": manual=manual[manual["category_name"].fillna("").astype(str).eq(cat)].copy()
+            mdf=manual[["id","name","unit_name"]].copy(); mdf.insert(0,"Выбрать",False); mdf["Количество"]=0.0; mdf["Цена"]=0.0; mdf.columns=["Выбрать","ID","Материал","Единица","Количество","Цена"]
+            supplier=st.selectbox("Поставщик",["Без поставщика"]+list(smap.keys()),key="manual_receipt_supplier")
+            with st.form("manual_receipt_form",clear_on_submit=False):
+                edited=st.data_editor(mdf,key="manual_receipt_editor",width="stretch",hide_index=True,column_config={"Выбрать":st.column_config.CheckboxColumn("Выбрать"),"ID":st.column_config.NumberColumn("ID",disabled=True),"Материал":st.column_config.TextColumn("Материал",disabled=True),"Единица":st.column_config.TextColumn("Единица",disabled=True),"Количество":st.column_config.NumberColumn("Количество",min_value=0.0,step=0.001,format="%.4f"),"Цена":st.column_config.NumberColumn("Цена",min_value=0.0,step=0.01,format="%.2f")},disabled=["ID","Материал","Единица"])
+                execute=st.form_submit_button("Выполнить приход",use_container_width=True)
+            if execute:
+                sel=edited[edited["Выбрать"].fillna(False)&(edited["Количество"].fillna(0)>0)].copy()
+                if sel.empty: st.warning("Выберите материалы и укажите количество.")
+                else:
+                    sid=smap.get(supplier); statements=[]
+                    for _,row in sel.iterrows():
+                        mid=safe_int(row["ID"]); qty=safe_float(row["Количество"]); price=safe_float(row["Цена"]); statements.extend([("INSERT INTO reklet.material_transactions(material_id,supplier_id,operation_type,quantity,unit_price,transaction_type) VALUES (%s,%s,'purchase',%s,%s,'IN')",(mid,sid,qty,price)),("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)+%s WHERE id=%s",(qty,mid))]);
+                        if sid: statements.append(("INSERT INTO reklet.material_suppliers(material_id,supplier_id,purchase_price) VALUES (%s,%s,%s) ON CONFLICT(material_id,supplier_id) DO UPDATE SET purchase_price=EXCLUDED.purchase_price",(mid,sid,price)))
+                    run_transaction(statements); st.success(f"Приход выполнен: {len(sel)} поз."); st.session_state.pop("manual_receipt_editor",None); st.rerun()
+        history=run_query("""SELECT mt.created_at AS \"Дата\",s.name AS \"Поставщик\",o.object_name AS \"Объект\",m.name AS \"Материал\",u.name AS \"Единица\",mt.quantity AS \"Количество\",mt.unit_price AS \"Цена\",mt.quantity*COALESCE(mt.unit_price,0) AS \"Сумма\" FROM reklet.material_transactions mt LEFT JOIN reklet.suppliers s ON s.id=mt.supplier_id LEFT JOIN reklet.objects o ON o.id=mt.object_id JOIN reklet.materials m ON m.id=mt.material_id LEFT JOIN reklet.units u ON u.id=m.unit_id WHERE mt.operation_type='purchase' AND mt.transaction_type='IN' ORDER BY mt.created_at DESC LIMIT 500""",fetch=True); st.markdown("---"); st.subheader("История прихода материалов")
+        if not history.empty: st.dataframe(history,width="stretch",hide_index=True); render_print_html("Ведомость прихода материалов",history,"print_material_receipt_history")
 
-        st.subheader(
-            "Движение материалов"
-        )
+    elif active_material_section=="issue":
+        st.subheader("Выдача материалов в производство")
+        object_id,object_row=warehouse_select_object("material_issue")
+        if object_id is not None:
+            planning=get_object_material_planning(object_id)
+            if planning.empty: st.info("Для выбранного объекта нет потребности в материалах.")
+            else:
+                scope=st.selectbox("Материалы",["Все материалы","Только необходимые для объекта"],key="issue_material_scope"); issue=planning.copy();
+                if scope=="Только необходимые для объекта": issue=issue[issue["remaining_need"]>0].copy()
+                if issue.empty: st.info("Материалов для выбранного отбора нет.")
+                else:
+                    idf=issue[["material_id","material_name","unit_name","stock_quantity","required_quantity","issued_quantity","reserved_quantity"]].copy(); idf.insert(0,"Выбрать",False); idf["Доступно к выдаче"]=idf[["reserved_quantity","stock_quantity"]].min(axis=1); idf["Выдать"]=0.0; idf.columns=["Выбрать","ID","Материал","Единица","На складе","Потребность объекта","Выдано","Зарезервировано","Доступно к выдаче","Выдать"]
+                    with st.form(f"issue_materials_form_{object_id}",clear_on_submit=False):
+                        edited=st.data_editor(idf,key=f"issue_materials_editor_{object_id}_{scope}",width="stretch",hide_index=True,column_config={"Выбрать":st.column_config.CheckboxColumn("Выбрать"),"ID":st.column_config.NumberColumn("ID",disabled=True),"Материал":st.column_config.TextColumn("Материал",disabled=True),"Единица":st.column_config.TextColumn("Единица",disabled=True),"На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.4f"),"Потребность объекта":st.column_config.NumberColumn("Потребность объекта",disabled=True,format="%.4f"),"Выдано":st.column_config.NumberColumn("Выдано",disabled=True,format="%.4f"),"Зарезервировано":st.column_config.NumberColumn("Зарезервировано",disabled=True,format="%.4f"),"Доступно к выдаче":st.column_config.NumberColumn("Доступно к выдаче",disabled=True,format="%.4f"),"Выдать":st.column_config.NumberColumn("Выдать",min_value=0.0,step=0.001,format="%.4f")},disabled=["ID","Материал","Единица","На складе","Потребность объекта","Выдано","Зарезервировано","Доступно к выдаче"]); execute=st.form_submit_button("Выполнить выдачу в производство",use_container_width=True)
+                    if execute:
+                        selected=edited[edited["Выбрать"].fillna(False)&(edited["Выдать"].fillna(0)>0)].copy(); errors=[]; statements=[]
+                        for _,row in selected.iterrows():
+                            mid=safe_int(row["ID"]); qty=safe_float(row["Выдать"]); stock=safe_float(row["На складе"]); reserved=safe_float(row["Зарезервировано"])
+                            if qty>stock+1e-9: errors.append(f"{row['Материал']}: на складе только {stock:.4f}.")
+                            if qty>reserved+1e-9: errors.append(f"{row['Материал']}: зарезервировано только {reserved:.4f} для этого объекта.")
+                            statements.extend([("INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')",(mid,object_id,qty)),("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",(qty,mid)),("UPDATE reklet.material_reservations SET quantity_reserved=quantity_reserved-%s,updated_at=timezone('utc'::text,now()) WHERE object_id=%s AND material_id=%s",(qty,object_id,mid))])
+                        statements.append(("DELETE FROM reklet.material_reservations WHERE object_id=%s AND quantity_reserved<=0",(object_id,)))
+                        if selected.empty: st.warning("Выберите материалы и укажите количество.")
+                        elif errors: st.error("Выдача не выполнена:\n"+"\n".join(errors))
+                        else: run_transaction(statements); st.success("Материалы выданы в производство."); st.session_state.pop(f"issue_materials_editor_{object_id}_{scope}",None); st.rerun()
 
-        movements = run_query(
-            """
-            SELECT
-
-                mt.id,
-
-                mt.created_at,
-
-                m.name AS material,
-
-                s.name AS supplier,
-
-                o.object_name AS object_name,
-
-                mt.operation_type,
-
-                mt.quantity,
-
-                mt.unit_price,
-
-                mt.transaction_type
-
-            FROM
-                reklet.material_transactions mt
-
-            LEFT JOIN reklet.materials m
-                ON m.id = mt.material_id
-
-            LEFT JOIN reklet.suppliers s
-                ON s.id = mt.supplier_id
-
-            LEFT JOIN reklet.objects o
-                ON o.id = mt.object_id
-
-            ORDER BY
-                mt.created_at DESC
-
-            LIMIT 500
-            """,
-            fetch=True
-        )
-
-        if not movements.empty:
-
-            movement_view = movements.copy()
-            st.dataframe(
-                movement_view,
-                width="stretch",
-                hide_index=True
-            )
-            render_print_html("Движение материалов", movement_view, "print_material_movements")
-
-
+    elif active_material_section=="movement":
+        st.subheader("Движение материалов")
+        movements=run_query("""SELECT * FROM (SELECT mt.created_at AS tx_date,CASE mt.operation_type WHEN 'purchase' THEN 'Приход материала' WHEN 'production_transfer' THEN 'Выдано в производство' ELSE mt.operation_type END AS operation_name,c.name AS client_name,o.object_name,NULL::text AS product_name,m.name AS material_name,s.name AS supplier_name,mt.quantity::numeric AS quantity,mt.unit_price::numeric AS unit_price FROM reklet.material_transactions mt LEFT JOIN reklet.materials m ON m.id=mt.material_id LEFT JOIN reklet.suppliers s ON s.id=mt.supplier_id LEFT JOIN reklet.objects o ON o.id=mt.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id UNION ALL SELECT mc.created_at AS tx_date,'Списано при производстве'::text AS operation_name,c.name AS client_name,o.object_name,oi.item_name AS product_name,m.name AS material_name,NULL::text AS supplier_name,mc.quantity::numeric AS quantity,NULL::numeric AS unit_price FROM reklet.material_consumption mc LEFT JOIN reklet.objects o ON o.id=mc.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id LEFT JOIN reklet.object_items oi ON oi.id=mc.object_item_id LEFT JOIN reklet.materials m ON m.id=mc.material_id) x ORDER BY tx_date DESC LIMIT 500""",fetch=True)
+        if movements.empty: st.info("Движений материалов пока нет.")
+        else:
+            view=movements.rename(columns={"tx_date":"Дата","operation_name":"Операция","client_name":"Заказчик","object_name":"Объект","product_name":"Изделие","material_name":"Материал","supplier_name":"Поставщик","quantity":"Количество","unit_price":"Цена"})[["Дата","Операция","Заказчик","Объект","Изделие","Материал","Поставщик","Количество","Цена"]]; st.dataframe(view,width="stretch",hide_index=True); render_print_html("Движение материалов",view,"print_material_movements")
 
 # ============================================================
 # SUPPLIERS
@@ -3946,10 +3775,11 @@ elif menu == "Поставщики":
                     used=run_query(
                         """SELECT
                              (SELECT COUNT(*) FROM reklet.material_suppliers WHERE supplier_id=%s) AS material_links,
-                             (SELECT COUNT(*) FROM reklet.material_transactions WHERE supplier_id=%s) AS transactions""",
-                        (selected_id,selected_id),fetch=True
+                             (SELECT COUNT(*) FROM reklet.material_transactions WHERE supplier_id=%s) AS transactions,
+                             (SELECT COUNT(*) FROM reklet.purchase_orders WHERE supplier_id=%s) AS purchase_orders""",
+                        (selected_id,selected_id,selected_id),fetch=True
                     )
-                    if int(used.iloc[0]["material_links"])>0 or int(used.iloc[0]["transactions"])>0:
+                    if int(used.iloc[0]["material_links"])>0 or int(used.iloc[0]["transactions"])>0 or int(used.iloc[0]["purchase_orders"])>0:
                         st.error("Удаление невозможно: поставщик используется в связанных данных.")
                     else:
                         run_query("DELETE FROM reklet.suppliers WHERE id=%s",(selected_id,))
@@ -3990,6 +3820,41 @@ elif menu == "Производство":
         if production_df.empty:
             st.success("Для выбранного объекта производство завершено.")
         else:
+            production_material_requirements = run_query(
+                """
+                SELECT oi.id AS object_item_id, ptm.material_id,
+                       SUM(COALESCE(ptm.quantity_per_unit,0)*COALESCE(ptm.waste_coefficient,m.default_waste_coefficient,1)) AS material_per_product
+                FROM reklet.object_items oi
+                JOIN reklet.product_template_materials ptm
+                  ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
+                JOIN reklet.materials m
+                  ON m.id=ptm.material_id
+                WHERE oi.object_id=%s
+                GROUP BY oi.id,ptm.material_id
+                """,
+                (object_id,), fetch=True
+            )
+            issued_materials = run_query(
+                """SELECT material_id,COALESCE(SUM(quantity),0) AS issued_quantity
+                   FROM reklet.material_transactions
+                   WHERE object_id=%s AND operation_type='production_transfer' AND transaction_type='OUT'
+                   GROUP BY material_id""",
+                (object_id,), fetch=True
+            )
+            consumed_materials = run_query(
+                """SELECT material_id,COALESCE(SUM(quantity),0) AS consumed_quantity
+                   FROM reklet.material_consumption
+                   WHERE object_id=%s GROUP BY material_id""",
+                (object_id,), fetch=True
+            )
+            issued_map={safe_int(r["material_id"]):safe_float(r["issued_quantity"]) for _,r in issued_materials.iterrows()} if not issued_materials.empty else {}
+            consumed_map={safe_int(r["material_id"]):safe_float(r["consumed_quantity"]) for _,r in consumed_materials.iterrows()} if not consumed_materials.empty else {}
+            wip_map={mid:issued_map.get(mid,0.0)-consumed_map.get(mid,0.0) for mid in set(issued_map)|set(consumed_map)}
+            req_map={}
+            if not production_material_requirements.empty:
+                for _,rr in production_material_requirements.iterrows():
+                    req_map.setdefault(safe_int(rr["object_item_id"]),[]).append((safe_int(rr["material_id"]),safe_float(rr["material_per_product"])))
+
             editor = production_df[["id","item_name","quantity_needed","manufactured_total","qty_production","qty_ready"]].copy()
             editor.columns = ["ID","Изделие","Заказано","Изготовлено","В производстве","Уже на готовой продукции"]
             editor["Передать на склад"] = 0
@@ -4026,6 +3891,8 @@ elif menu == "Производство":
                 selected = edited[(pd.to_numeric(edited["Передать на склад"], errors="coerce").fillna(0) > 0) | (pd.to_numeric(edited["Сразу смонтировать"], errors="coerce").fillna(0) > 0) | (pd.to_numeric(edited["Изготовлено"], errors="coerce").fillna(0) != production_df["manufactured_total"].values)] .copy()
                 errors=[]
                 statements=[]
+                consumption_plan=[]
+                consumption_by_material={}
                 for idx, r in edited.iterrows():
                     src = production_df.iloc[idx]
                     item_id=safe_int(r["ID"])
@@ -4040,6 +3907,11 @@ elif menu == "Производство":
                     if new_manufactured > ordered:
                         errors.append(f"{r['Изделие']}: изготовлено {new_manufactured}, заказано только {ordered}.")
                     added = new_manufactured - old_manufactured
+                    if added > 0:
+                        for material_id,per_product in req_map.get(item_id,[]):
+                            qty_material=added*per_product
+                            consumption_plan.append((item_id,material_id,qty_material))
+                            consumption_by_material[material_id]=consumption_by_material.get(material_id,0.0)+qty_material
                     available_for_transfer = in_prod + max(added,0)
                     if to_stock + direct_install > available_for_transfer:
                         errors.append(f"{r['Изделие']}: передача {to_stock + direct_install} шт., доступно максимум {available_for_transfer} шт.")
@@ -4086,6 +3958,16 @@ elif menu == "Производство":
                                 ("INSERT INTO reklet.transport_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'arrive',%s FROM reklet.object_items WHERE id=%s", (direct_install,item_id)),
                                 ("INSERT INTO reklet.installation_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'complete',%s FROM reklet.object_items WHERE id=%s", (direct_install,item_id)),
                             ])
+
+                for material_id,required_qty in consumption_by_material.items():
+                    available_wip=wip_map.get(material_id,0.0)
+                    if required_qty>available_wip+1e-9:
+                        nm=run_query("SELECT name FROM reklet.materials WHERE id=%s",(material_id,),fetch=True)
+                        name=str(nm.iloc[0]["name"]) if not nm.empty else str(material_id)
+                        errors.append(f"{name}: для нового производства нужно {required_qty:.4f}, а в производстве доступно только {max(available_wip,0):.4f}. Сначала выдайте материал в производство.")
+                if not errors:
+                    for item_id,material_id,qty_material in consumption_plan:
+                        statements.append(("INSERT INTO reklet.material_consumption(object_item_id,object_id,material_id,quantity) VALUES (%s,%s,%s,%s)",(item_id,object_id,material_id,qty_material)))
 
                 if errors:
                     st.error("Операция не выполнена:\n" + "\n".join(errors))
@@ -4811,6 +4693,24 @@ elif menu == "Отчёты":
                 LEFT JOIN reklet.suppliers s ON s.id = mt.supplier_id
                 LEFT JOIN reklet.objects o ON o.id = mt.object_id
                 LEFT JOIN reklet.clients c ON c.id = o.client_id
+
+                UNION ALL
+
+                SELECT
+                    mc.created_at AS tx_date,
+                    'Склад'::text AS section_name,
+                    'Списано при производстве'::text AS operation_name,
+                    c.name AS client_name,
+                    o.object_name,
+                    oi.item_name AS product_name,
+                    m.name AS material_name,
+                    NULL::text AS supplier_name,
+                    mc.quantity::numeric AS quantity
+                FROM reklet.material_consumption mc
+                LEFT JOIN reklet.objects o ON o.id=mc.object_id
+                LEFT JOIN reklet.clients c ON c.id=o.client_id
+                LEFT JOIN reklet.object_items oi ON oi.id=mc.object_item_id
+                LEFT JOIN reklet.materials m ON m.id=mc.material_id
 
                 UNION ALL
 
