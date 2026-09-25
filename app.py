@@ -3847,11 +3847,18 @@ elif menu == "Склад материалов":
             editor=filtered[["id","name","category_name","unit_name","cost_per_unit","stock_quantity","default_waste_coefficient"]].copy()
             editor["reserved_quantity"]=editor["id"].map(rmap).fillna(0.0)
             editor["available_quantity"]=(pd.to_numeric(editor["stock_quantity"],errors="coerce").fillna(0)-editor["reserved_quantity"]).clip(lower=0)
+            # Keep the dataframe column order exactly aligned with the labels.
+            # This is important because st.data_editor returns values by column name.
+            editor=editor[[
+                "id","name","category_name","unit_name","cost_per_unit",
+                "stock_quantity","reserved_quantity","available_quantity",
+                "default_waste_coefficient"
+            ]].copy()
             editor.columns=["ID","Материал","Категория","Единица","Цена за единицу","На складе","Зарезервировано","Доступно","Коэффициент отходов"]
 
             edited=st.data_editor(
                 editor,
-                key="materials_editor",
+                key="materials_editor_v2",
                 width="stretch",
                 hide_index=True,
                 column_config={
@@ -3918,7 +3925,7 @@ elif menu == "Склад материалов":
                     cancel_materials = st.button("Отменить", key="cancel_material_changes", use_container_width=True)
                 if cancel_materials:
                     st.session_state.pop("pending_material_changes", None)
-                    st.session_state.pop("materials_editor", None)
+                    st.session_state.pop("materials_editor_v2", None)
                     st.rerun()
                 if confirm_materials:
                     cmap={str(r["name"]):int(r["id"]) for _,r in categories.iterrows()}
@@ -3930,7 +3937,7 @@ elif menu == "Склад материалов":
                         ))
                     run_transaction(statements)
                     st.session_state.pop("pending_material_changes", None)
-                    st.session_state.pop("materials_editor", None)
+                    st.session_state.pop("materials_editor_v2", None)
                     st.success("Изменения материалов подтверждены и сохранены.")
                     st.rerun()
 
