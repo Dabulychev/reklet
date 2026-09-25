@@ -1438,12 +1438,13 @@ def build_auto_material_pipeline_statements(object_id, production_requests):
             statements.append((
                 """
                 INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved)
-                VALUES (%s,%s,%s)
+                SELECT %s,%s,%s
+                WHERE %s > 1e-9
                 ON CONFLICT(object_id,material_id)
                 DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,
                               updated_at=timezone('utc'::text,now())
                 """,
-                (object_id,material_id,reserve_from_stock),
+                (object_id,material_id,reserve_from_stock,reserve_from_stock),
             ))
 
         if purchase_qty>1e-9:
@@ -1529,12 +1530,13 @@ def build_auto_material_pipeline_statements(object_id, production_requests):
             statements.append((
                 """
                 INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved)
-                VALUES (%s,%s,%s)
+                SELECT %s,%s,%s
+                WHERE %s > 1e-9
                 ON CONFLICT(object_id,material_id)
                 DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,
                               updated_at=timezone('utc'::text,now())
                 """,
-                (object_id,material_id,purchase_qty),
+                (object_id,material_id,purchase_qty,purchase_qty),
             ))
 
         # Record the reservation action in history. In the management shortcut the
@@ -1543,7 +1545,7 @@ def build_auto_material_pipeline_statements(object_id, production_requests):
         if reserve_from_stock>1e-9:
             statements.append((
                 "INSERT INTO reklet.material_reservation_transactions(object_id,material_id,operation_type,quantity) VALUES (%s,%s,'reserve',%s)",
-                (object_id,material_id,reserve_from_stock),
+                (object_id,material_id,reserve_from_stock,reserve_from_stock),
             ))
         if purchase_qty>1e-9:
             statements.append((
@@ -1551,7 +1553,8 @@ def build_auto_material_pipeline_statements(object_id, production_requests):
                 (object_id,material_id,purchase_qty),
             ))
 
-        # Issue the total requirement to production. The full quantity is now reserved.
+        # Issue the total requirement to production. Never write a zero
+        # reservation first: material_reservations has CHECK(quantity_reserved > 0).
         if required_total>1e-9:
             statements.append((
                 "INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')",
@@ -1561,18 +1564,26 @@ def build_auto_material_pipeline_statements(object_id, production_requests):
                 "UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",
                 (required_total,material_id),
             ))
-            statements.append((
-                """
-                UPDATE reklet.material_reservations
-                SET quantity_reserved=quantity_reserved-%s,updated_at=timezone('utc'::text,now())
-                WHERE object_id=%s AND material_id=%s
-                """,
-                (required_total,object_id,material_id),
-            ))
-            statements.append((
-                "DELETE FROM reklet.material_reservations WHERE object_id=%s AND material_id=%s AND quantity_reserved<=0",
-                (object_id,material_id),
-            ))
+
+            # The reserve may have existed before the shortcut was used. If
+            # issuing the material consumes the reserve completely, delete the
+            # row directly. Updating it to 0 would violate the CHECK constraint
+            # before a later DELETE could run.
+            resulting_reserve=max(object_reserved+reserve_from_stock+purchase_qty-required_total,0.0)
+            if resulting_reserve <= 1e-9:
+                statements.append((
+                    "DELETE FROM reklet.material_reservations WHERE object_id=%s AND material_id=%s",
+                    (object_id,material_id),
+                ))
+            else:
+                statements.append((
+                    """
+                    UPDATE reklet.material_reservations
+                    SET quantity_reserved=%s,updated_at=timezone('utc'::text,now())
+                    WHERE object_id=%s AND material_id=%s
+                    """,
+                    (resulting_reserve,object_id,material_id),
+                ))
 
     for item_id, per_item in item_materials.items():
         for material_id, qty, unit_cost in per_item:
@@ -4160,7 +4171,7 @@ elif menu == "Склад материалов":
                         if add>avail+1e-9: errors.append(f"{row['Материал']}: доступно только {avail:.4f}.")
                         if release>res+1e-9: errors.append(f"{row['Материал']}: текущий резерв только {res:.4f}.")
                         if add>0:
-                            statements.append(("INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved) VALUES (%s,%s,%s) ON CONFLICT(object_id,material_id) DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,updated_at=timezone('utc'::text,now())",(object_id,mid,add)))
+                            statements.append(("INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved) SELECT %s,%s,%s WHERE %s>1e-9 ON CONFLICT(object_id,material_id) DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,updated_at=timezone('utc'::text,now())",(object_id,mid,add,add)))
                             statements.append(("INSERT INTO reklet.material_reservation_transactions(object_id,material_id,operation_type,quantity) VALUES (%s,%s,'reserve',%s)",(object_id,mid,add)))
                         elif release>0:
                             if release >= res-1e-9:
@@ -4290,7 +4301,7 @@ elif menu == "Склад материалов":
                     raw=openp.loc[int(idx)]; qty=safe_float(row["Принять"])
                     statements.extend([("INSERT INTO reklet.material_transactions(material_id,supplier_id,object_id,operation_type,quantity,unit_price,transaction_type) VALUES (%s,%s,%s,'purchase',%s,%s,'IN')",(safe_int(raw["material_id"]),safe_int(raw["supplier_id"]),safe_int(raw["object_id"]),qty,safe_float(raw["unit_price"]))),("UPDATE reklet.purchase_order_items SET quantity_received=quantity_received+%s WHERE id=%s",(qty,safe_int(raw["purchase_item_id"]))),("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)+%s WHERE id=%s",(qty,safe_int(raw["material_id"])))])
                 for (oid,mid),qty in auto.items():
-                    if qty>0: statements.append(("INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved) VALUES (%s,%s,%s) ON CONFLICT(object_id,material_id) DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,updated_at=timezone('utc'::text,now())",(oid,mid,qty)))
+                    if qty>0: statements.append(("INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved) SELECT %s,%s,%s WHERE %s>1e-9 ON CONFLICT(object_id,material_id) DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,updated_at=timezone('utc'::text,now())",(oid,mid,qty,qty)))
                 for po_id in sorted({safe_int(openp.loc[int(i),"purchase_order_id"]) for i in selected.index}): statements.append(("""UPDATE reklet.purchase_orders po SET status=CASE WHEN NOT EXISTS(SELECT 1 FROM reklet.purchase_order_items poi WHERE poi.purchase_order_id=po.id AND poi.quantity_received<poi.quantity_ordered) THEN 'received' WHEN EXISTS(SELECT 1 FROM reklet.purchase_order_items poi WHERE poi.purchase_order_id=po.id AND poi.quantity_received>0) THEN 'partial' ELSE 'ordered' END WHERE po.id=%s""",(po_id,)))
                 if selected.empty: st.warning("Выберите позиции и укажите количество принятого материала.")
                 elif errors: st.error("Приход не выполнен:\n"+"\n".join(errors))
