@@ -454,7 +454,8 @@ def ensure_material_planning_tables():
                 to_regclass('reklet.purchase_orders') AS purchase_orders,
                 to_regclass('reklet.purchase_order_items') AS purchase_order_items,
                 to_regclass('reklet.material_consumption') AS material_consumption,
-                to_regclass('reklet.object_item_material_costs') AS object_item_material_costs
+                to_regclass('reklet.object_item_material_costs') AS object_item_material_costs,
+                to_regclass('reklet.material_reservation_transactions') AS material_reservation_transactions
             """,
             fetch=True,
         )
@@ -567,6 +568,16 @@ def ensure_material_planning_tables():
         )
         """, ()),
         ("ALTER TABLE reklet.material_consumption ADD COLUMN IF NOT EXISTS unit_cost_snapshot numeric NULL", ()),
+        ("""CREATE TABLE IF NOT EXISTS reklet.material_reservation_transactions (
+            id serial4 PRIMARY KEY,
+            object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
+            material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
+            operation_type text NOT NULL,
+            quantity numeric NOT NULL,
+            created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+            CONSTRAINT material_reservation_transactions_type_check CHECK (operation_type IN ('reserve','release')),
+            CONSTRAINT material_reservation_transactions_quantity_check CHECK (quantity > 0)
+        )""", ()),
         ("CREATE INDEX IF NOT EXISTS idx_material_reservations_object ON reklet.material_reservations(object_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_material_reservations_material ON reklet.material_reservations(material_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON reklet.purchase_orders(supplier_id)", ()),
@@ -577,6 +588,8 @@ def ensure_material_planning_tables():
         ("CREATE INDEX IF NOT EXISTS idx_material_consumption_material ON reklet.material_consumption(material_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_object_item_material_costs_item ON reklet.object_item_material_costs(object_item_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_object_item_material_costs_material ON reklet.object_item_material_costs(material_id)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_material_reservation_transactions_object ON reklet.material_reservation_transactions(object_id)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_material_reservation_transactions_material ON reklet.material_reservation_transactions(material_id)", ()),
     ]
 
     run_transaction(schema_statements)
@@ -1521,6 +1534,20 @@ def build_auto_material_pipeline_statements(object_id, production_requests):
                 DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,
                               updated_at=timezone('utc'::text,now())
                 """,
+                (object_id,material_id,purchase_qty),
+            ))
+
+        # Record the reservation action in history. In the management shortcut the
+        # reservation is immediately converted into a production transfer, so it does
+        # not remain as a current balance; the history row proves that reserve happened.
+        if reserve_from_stock>1e-9:
+            statements.append((
+                "INSERT INTO reklet.material_reservation_transactions(object_id,material_id,operation_type,quantity) VALUES (%s,%s,'reserve',%s)",
+                (object_id,material_id,reserve_from_stock),
+            ))
+        if purchase_qty>1e-9:
+            statements.append((
+                "INSERT INTO reklet.material_reservation_transactions(object_id,material_id,operation_type,quantity) VALUES (%s,%s,'reserve',%s)",
                 (object_id,material_id,purchase_qty),
             ))
 
@@ -2852,11 +2879,30 @@ elif menu == "Объекты":
                         if confirm:
                             statements = []
 
-                            auto_production_requests = [
-                                (safe_int(ch["tid"]), safe_int(ch.get("newly_produced_from_new", 0)))
-                                for ch in pending["changes"]
-                                if safe_int(ch.get("newly_produced_from_new", 0)) > 0
-                            ]
+                            auto_production_requests = []
+                            for ch in pending["changes"]:
+                                prod_qty = safe_int(ch.get("newly_produced_from_new", 0))
+                                if prod_qty <= 0:
+                                    continue
+                                item_df = run_query(
+                                    """
+                                    SELECT id
+                                    FROM reklet.object_items
+                                    WHERE object_id=%s
+                                      AND (product_template_id=%s OR template_id=%s)
+                                    ORDER BY id
+                                    LIMIT 1
+                                    """,
+                                    (object_id, safe_int(ch["tid"]), safe_int(ch["tid"])),
+                                    fetch=True,
+                                )
+                                if item_df.empty:
+                                    raise ValueError(
+                                        f"Не найдена позиция изделия в объекте: {ch.get('name','')}"
+                                    )
+                                auto_production_requests.append(
+                                    (safe_int(item_df.iloc[0]["id"]), prod_qty)
+                                )
                             # The management screen is intentionally a shortcut: when a
                             # command starts from a later stage, the warehouse postings
                             # are created automatically rather than blocking the user.
@@ -4113,8 +4159,15 @@ elif menu == "Склад материалов":
                         if add>max(rem-res,0)+1e-9: errors.append(f"{row['Материал']}: можно зарезервировать максимум {max(rem-res,0):.4f}.")
                         if add>avail+1e-9: errors.append(f"{row['Материал']}: доступно только {avail:.4f}.")
                         if release>res+1e-9: errors.append(f"{row['Материал']}: текущий резерв только {res:.4f}.")
-                        if add>0: statements.append(("INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved) VALUES (%s,%s,%s) ON CONFLICT(object_id,material_id) DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,updated_at=timezone('utc'::text,now())",(object_id,mid,add)))
-                        elif release>0: statements.append(("UPDATE reklet.material_reservations SET quantity_reserved=quantity_reserved-%s,updated_at=timezone('utc'::text,now()) WHERE object_id=%s AND material_id=%s",(release,object_id,mid)))
+                        if add>0:
+                            statements.append(("INSERT INTO reklet.material_reservations(object_id,material_id,quantity_reserved) VALUES (%s,%s,%s) ON CONFLICT(object_id,material_id) DO UPDATE SET quantity_reserved=reklet.material_reservations.quantity_reserved+EXCLUDED.quantity_reserved,updated_at=timezone('utc'::text,now())",(object_id,mid,add)))
+                            statements.append(("INSERT INTO reklet.material_reservation_transactions(object_id,material_id,operation_type,quantity) VALUES (%s,%s,'reserve',%s)",(object_id,mid,add)))
+                        elif release>0:
+                            if release >= res-1e-9:
+                                statements.append(("DELETE FROM reklet.material_reservations WHERE object_id=%s AND material_id=%s",(object_id,mid)))
+                            else:
+                                statements.append(("UPDATE reklet.material_reservations SET quantity_reserved=quantity_reserved-%s,updated_at=timezone('utc'::text,now()) WHERE object_id=%s AND material_id=%s",(release,object_id,mid)))
+                            statements.append(("INSERT INTO reklet.material_reservation_transactions(object_id,material_id,operation_type,quantity) VALUES (%s,%s,'release',%s)",(object_id,mid,release)))
                     statements.append(("DELETE FROM reklet.material_reservations WHERE object_id=%s AND quantity_reserved<=0",(object_id,)))
                     if selected.empty: st.info("Выберите материал и укажите количество.")
                     elif errors: st.error("Резерв не изменён:\n"+"\n".join(errors))
@@ -4314,7 +4367,63 @@ elif menu == "Склад материалов":
     elif active_material_section=="movement":
         ensure_material_planning_tables()
         st.subheader("Движение материалов")
-        movements=run_query("""SELECT * FROM (SELECT mt.created_at AS tx_date,CASE mt.operation_type WHEN 'purchase' THEN 'Приход материала' WHEN 'production_transfer' THEN 'Выдано в производство' ELSE mt.operation_type END AS operation_name,c.name AS client_name,o.object_name,NULL::text AS product_name,m.name AS material_name,s.name AS supplier_name,mt.quantity::numeric AS quantity,mt.unit_price::numeric AS unit_price FROM reklet.material_transactions mt LEFT JOIN reklet.materials m ON m.id=mt.material_id LEFT JOIN reklet.suppliers s ON s.id=mt.supplier_id LEFT JOIN reklet.objects o ON o.id=mt.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id UNION ALL SELECT mc.created_at AS tx_date,'Списано при производстве'::text AS operation_name,c.name AS client_name,o.object_name,oi.item_name AS product_name,m.name AS material_name,NULL::text AS supplier_name,mc.quantity::numeric AS quantity,COALESCE(mc.unit_cost_snapshot,0)::numeric AS unit_price FROM reklet.material_consumption mc LEFT JOIN reklet.objects o ON o.id=mc.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id LEFT JOIN reklet.object_items oi ON oi.id=mc.object_item_id LEFT JOIN reklet.materials m ON m.id=mc.material_id) x ORDER BY tx_date DESC LIMIT 500""",fetch=True)
+        movements=run_query("""SELECT * FROM (
+            SELECT mt.created_at AS tx_date,
+                   CASE mt.operation_type
+                       WHEN 'purchase' THEN 'Приход материала'
+                       WHEN 'production_transfer' THEN 'Выдано в производство'
+                       ELSE mt.operation_type
+                   END AS operation_name,
+                   c.name AS client_name,
+                   o.object_name,
+                   NULL::text AS product_name,
+                   m.name AS material_name,
+                   s.name AS supplier_name,
+                   mt.quantity::numeric AS quantity,
+                   mt.unit_price::numeric AS unit_price
+            FROM reklet.material_transactions mt
+            LEFT JOIN reklet.materials m ON m.id=mt.material_id
+            LEFT JOIN reklet.suppliers s ON s.id=mt.supplier_id
+            LEFT JOIN reklet.objects o ON o.id=mt.object_id
+            LEFT JOIN reklet.clients c ON c.id=o.client_id
+
+            UNION ALL
+
+            SELECT mc.created_at AS tx_date,
+                   'Списано при производстве'::text AS operation_name,
+                   c.name AS client_name,
+                   o.object_name,
+                   oi.item_name AS product_name,
+                   m.name AS material_name,
+                   NULL::text AS supplier_name,
+                   mc.quantity::numeric AS quantity,
+                   COALESCE(mc.unit_cost_snapshot,0)::numeric AS unit_price
+            FROM reklet.material_consumption mc
+            LEFT JOIN reklet.objects o ON o.id=mc.object_id
+            LEFT JOIN reklet.clients c ON c.id=o.client_id
+            LEFT JOIN reklet.object_items oi ON oi.id=mc.object_item_id
+            LEFT JOIN reklet.materials m ON m.id=mc.material_id
+
+            UNION ALL
+
+            SELECT mrt.created_at AS tx_date,
+                   CASE mrt.operation_type
+                       WHEN 'reserve' THEN 'Резерв материала'
+                       WHEN 'release' THEN 'Снятие резерва'
+                       ELSE mrt.operation_type
+                   END AS operation_name,
+                   c.name AS client_name,
+                   o.object_name,
+                   NULL::text AS product_name,
+                   m.name AS material_name,
+                   NULL::text AS supplier_name,
+                   mrt.quantity::numeric AS quantity,
+                   NULL::numeric AS unit_price
+            FROM reklet.material_reservation_transactions mrt
+            LEFT JOIN reklet.objects o ON o.id=mrt.object_id
+            LEFT JOIN reklet.clients c ON c.id=o.client_id
+            LEFT JOIN reklet.materials m ON m.id=mrt.material_id
+        ) x ORDER BY tx_date DESC LIMIT 500""",fetch=True)
         if movements.empty: st.info("Движений материалов пока нет.")
         else:
             view=movements.rename(columns={"tx_date":"Дата","operation_name":"Операция","client_name":"Заказчик","object_name":"Объект","product_name":"Изделие","material_name":"Материал","supplier_name":"Поставщик","quantity":"Количество","unit_price":"Цена"})[["Дата","Операция","Заказчик","Объект","Изделие","Материал","Поставщик","Количество","Цена"]]; st.dataframe(view,width="stretch",hide_index=True); render_print_html("Движение материалов",view,"print_material_movements")
