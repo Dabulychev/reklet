@@ -4000,8 +4000,6 @@ elif menu == "Склад материалов":
 
     material_sections = [
         ("Перечень материалов", "list"),
-        ("Добавить материал", "add"),
-        ("Категории материалов", "categories"),
         ("Потребность и резерв", "planning"),
         ("Закупка материалов", "purchase"),
         ("Приход материалов", "receipt"),
@@ -4157,6 +4155,163 @@ elif menu == "Склад материалов":
                     st.session_state.pop("materials_editor_v2", None)
                     st.success("Изменения материалов подтверждены и сохранены.")
                     st.rerun()
+
+            # --------------------------------------------------------
+            # ДОБАВИТЬ МАТЕРИАЛ — раскрывающийся блок
+            # --------------------------------------------------------
+            with st.expander("Добавить материал", expanded=False):
+                st.subheader("Добавить материал")
+                units=run_query("SELECT id,name FROM reklet.units ORDER BY name",fetch=True)
+                unit_map={str(r["name"]):int(r["id"]) for _,r in units.iterrows()} if not units.empty else {}
+                cat_options=["— Без категории —"]+(categories["name"].astype(str).tolist() if not categories.empty else [])
+                suppliers_for_add = get_suppliers()
+                supplier_map={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in suppliers_for_add.iterrows()} if not suppliers_for_add.empty else {}
+
+                with st.form("add_material_form_list_expander"):
+                    name=st.text_input("Название материала", key="add_material_name_expander")
+                    unit=st.selectbox("Единица измерения",list(unit_map.keys()), key="add_material_unit_expander") if unit_map else None
+                    cat=st.selectbox("Категория",cat_options, key="add_material_category_expander")
+                    price=st.number_input("Цена за единицу",min_value=0.0,value=0.0,format="%.2f", key="add_material_price_expander")
+                    stock=st.number_input("Начальный остаток",min_value=0.0,value=0.0,format="%.4f", key="add_material_stock_expander")
+                    waste=st.number_input("Коэффициент отходов",min_value=0.0,value=1.20,format="%.2f", key="add_material_waste_expander")
+                    chosen_suppliers=st.multiselect("Поставщики (можно выбрать одного или нескольких)",list(supplier_map.keys()),key="add_material_suppliers_expander")
+                    submit=st.form_submit_button("Добавить материал",use_container_width=True)
+                    if submit:
+                        if not name.strip() or not unit_map:
+                            st.warning("Укажите название материала и единицу измерения.")
+                        else:
+                            st.session_state["pending_material_create_list_expander"]={
+                                "name":name.strip(),
+                                "unit_id":unit_map[unit],
+                                "unit_name":unit,
+                                "category":cat,
+                                "price":price,
+                                "stock":stock,
+                                "waste":waste,
+                                "supplier_ids":[supplier_map[x] for x in chosen_suppliers],
+                                "supplier_labels":chosen_suppliers,
+                            }
+
+                pending_create=st.session_state.get("pending_material_create_list_expander")
+                if pending_create:
+                    st.warning("Подтвердите добавление материала в перечень.")
+                    cat_text=pending_create["category"] if pending_create["category"]!="— Без категории —" else "без категории"
+                    suppliers_text=", ".join(pending_create["supplier_labels"]) if pending_create["supplier_labels"] else "поставщики пока не назначены"
+                    st.write(f"**Материал:** {pending_create['name']}")
+                    st.write(f"**Категория:** {cat_text}")
+                    st.write(f"**Единица:** {pending_create['unit_name']}")
+                    st.write(f"**Цена:** {pending_create['price']:.2f}  **Коэффициент отходов:** {pending_create['waste']:.2f}")
+                    st.write(f"**Поставщики:** {suppliers_text}")
+                    c1,c2=st.columns(2)
+                    with c1:
+                        confirm=st.button("Подтвердить добавление",key="confirm_material_create_list_expander",use_container_width=True,type="primary")
+                    with c2:
+                        cancel=st.button("Отменить",key="cancel_material_create_list_expander",use_container_width=True)
+                    if cancel:
+                        st.session_state.pop("pending_material_create_list_expander",None)
+                        st.rerun()
+                    if confirm:
+                        cmap={str(r["name"]):int(r["id"]) for _,r in categories.iterrows()}
+                        cid=cmap.get(pending_create["category"]) if pending_create["category"]!="— Без категории —" else None
+                        conn=get_connection(); cur=conn.cursor()
+                        try:
+                            cur.execute("""INSERT INTO reklet.materials(name,unit_id,category_id,cost_per_unit,stock_quantity,default_waste_coefficient) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",(pending_create["name"],pending_create["unit_id"],cid,pending_create["price"],pending_create["stock"],pending_create["waste"]))
+                            material_id=int(cur.fetchone()[0])
+                            for sid in pending_create["supplier_ids"]:
+                                cur.execute("""INSERT INTO reklet.material_suppliers(material_id,supplier_id,purchase_price) VALUES (%s,%s,%s) ON CONFLICT(material_id,supplier_id) DO UPDATE SET purchase_price=EXCLUDED.purchase_price""",(material_id,sid,pending_create["price"]))
+                            conn.commit()
+                        except Exception:
+                            conn.rollback()
+                            raise
+                        finally:
+                            cur.close()
+                            conn.close()
+                        st.session_state.pop("pending_material_create_list_expander",None)
+                        st.success(f"Материал «{pending_create['name']}» добавлен в перечень в категорию «{cat_text}».")
+                        st.rerun()
+
+            # --------------------------------------------------------
+            # КАТЕГОРИИ МАТЕРИАЛОВ — раскрывающийся блок
+            # --------------------------------------------------------
+            with st.expander("Категории материалов", expanded=False):
+                st.subheader("Категории материалов")
+                categories_exp=get_material_categories()
+
+                st.markdown("### Перечень категорий")
+                if categories_exp.empty:
+                    st.info("Категорий материалов нет.")
+                else:
+                    cat_view=categories_exp[["id","name"]].copy()
+                    cat_view.columns=["ID","Категория"]
+                    st.dataframe(cat_view,width="stretch",hide_index=True)
+
+                with st.expander("Добавить категорию",expanded=False):
+                    with st.form("add_material_category_form_list_expander"):
+                        new=st.text_input("Название категории",key="new_material_category_name_list_expander")
+                        if st.form_submit_button("Добавить",use_container_width=True):
+                            if not new.strip():
+                                st.warning("Укажите название категории.")
+                            else:
+                                try:
+                                    run_query("INSERT INTO reklet.material_categories(name) VALUES (%s)",(new.strip(),))
+                                    st.success(f"Категория «{new.strip()}» добавлена.")
+                                    st.rerun()
+                                except Exception:
+                                    st.error("Не удалось добавить категорию. Возможно, такое название уже существует.")
+
+                with st.expander("Корректировать категорию",expanded=False):
+                    if categories_exp.empty:
+                        st.info("Категорий нет.")
+                    else:
+                        cmap={f"{r['id']} — {r['name']}":int(r['id']) for _,r in categories_exp.iterrows()}
+                        label=st.selectbox("Категория",list(cmap.keys()),key="edit_material_category_select_list_expander")
+                        cid=cmap[label]
+                        current=str(categories_exp[categories_exp["id"]==cid].iloc[0]["name"])
+                        with st.form("edit_material_category_form_list_expander"):
+                            new=st.text_input("Новое название",value=current,key="edit_material_category_name_list_expander")
+                            if st.form_submit_button("Выполнить",use_container_width=True):
+                                if not new.strip():
+                                    st.warning("Название не может быть пустым.")
+                                elif new.strip()==current:
+                                    st.info("Изменений нет.")
+                                else:
+                                    st.session_state["pending_material_category_edit_list_expander"]={"id":cid,"old":current,"new":new.strip()}
+
+                        pending_cat=st.session_state.get("pending_material_category_edit_list_expander")
+                        if pending_cat and int(pending_cat["id"])==cid:
+                            st.warning("Подтверждение изменения категории")
+                            st.dataframe(pd.DataFrame([{"Категория":"Категория","Было":pending_cat["old"],"Станет":pending_cat["new"]}]),width="stretch",hide_index=True)
+                            c1,c2=st.columns(2)
+                            with c1:
+                                ok=st.button("Подтвердить",key="confirm_material_category_edit_list_expander",use_container_width=True,type="primary")
+                            with c2:
+                                no=st.button("Отменить",key="cancel_material_category_edit_list_expander",use_container_width=True)
+                            if no:
+                                st.session_state.pop("pending_material_category_edit_list_expander",None)
+                                st.rerun()
+                            if ok:
+                                run_query("UPDATE reklet.material_categories SET name=%s WHERE id=%s",(pending_cat["new"],pending_cat["id"]))
+                                st.session_state.pop("pending_material_category_edit_list_expander",None)
+                                st.success("Категория изменена.")
+                                st.rerun()
+
+                with st.expander("Безопасное удаление категории",expanded=False):
+                    if categories_exp.empty:
+                        st.info("Категорий нет.")
+                    else:
+                        cmap={f"{r['id']} — {r['name']}":int(r['id']) for _,r in categories_exp.iterrows()}
+                        label=st.selectbox("Категория",list(cmap.keys()),key="delete_material_category_safe_list_expander")
+                        cid=cmap[label]
+                        st.warning("Удаление необратимо. Используемая материалами категория не может быть удалена.")
+                        confirm=st.checkbox("Я подтверждаю удаление категории.",key="confirm_delete_material_category_safe_list_expander")
+                        if st.button("Удалить категорию",key="delete_material_category_safe_button_list_expander",disabled=not confirm,use_container_width=True):
+                            refs=run_query("SELECT COUNT(*) AS n FROM reklet.materials WHERE category_id=%s",(cid,),fetch=True)
+                            if int(refs.iloc[0]["n"])>0:
+                                st.error("Удаление запрещено: категория используется материалами.")
+                            else:
+                                run_query("DELETE FROM reklet.material_categories WHERE id=%s",(cid,))
+                                st.success("Категория удалена.")
+                                st.rerun()
 
     elif active_material_section=="add":
         st.subheader("Добавить материал")
