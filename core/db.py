@@ -2,6 +2,23 @@ import streamlit as st
 import pandas as pd
 import psycopg2
 
+
+# ============================================================
+# DATABASE CONFIGURATION
+# ============================================================
+
+try:
+    DB_HOST = st.secrets["DB_HOST"]
+    DB_PORT = int(st.secrets["DB_PORT"])
+    DB_NAME = st.secrets["DB_NAME"]
+    DB_USER = st.secrets["DB_USER"]
+    DB_PASSWORD = st.secrets["DB_PASSWORD"]
+
+except Exception:
+    st.error("Параметры подключения к базе данных не настроены.")
+    st.stop()
+
+
 @st.cache_resource
 def get_connection():
 
