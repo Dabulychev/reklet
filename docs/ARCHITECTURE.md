@@ -52,5 +52,18 @@ reports.py
 database/
     schema.sql
 
+
+---
+
+### Шаг 4. Сохрани
+
+Прокрути страницу **в самый низ**.
+
+Там будет блок **Commit changes**.
+
+В поле сообщения можешь написать:
+
+```text
+docs: document current architecture and refactoring plan
 docs/
     ARCHITECTURE.md
