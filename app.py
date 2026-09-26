@@ -4254,6 +4254,112 @@ elif menu == "Склад материалов":
                         st.success(f"Материал «{pending_create['name']}» добавлен в перечень в категорию «{cat_text}».")
                         st.rerun()
 
+                # ----------------------------------------------------
+                # БЕЗОПАСНОЕ УДАЛЕНИЕ МАТЕРИАЛА
+                # ----------------------------------------------------
+                with st.expander("Безопасное удаление материала", expanded=False):
+                    st.warning(
+                        "Удаление материала необратимо. Материал, который уже "
+                        "используется в спецификациях, закупках, движениях, "
+                        "резервах, производстве или других операциях, удалить нельзя."
+                    )
+
+                    all_materials_delete = get_materials_with_categories()
+                    if all_materials_delete.empty:
+                        st.info("Материалов для удаления нет.")
+                    else:
+                        delete_material_map = {
+                            f"{int(r['id'])} — {r['name']}": int(r['id'])
+                            for _, r in all_materials_delete.sort_values("name").iterrows()
+                        }
+                        delete_material_label = st.selectbox(
+                            "Материал",
+                            list(delete_material_map.keys()),
+                            key="safe_delete_material_select"
+                        )
+                        delete_material_id = delete_material_map[delete_material_label]
+                        selected_delete_material = all_materials_delete[
+                            all_materials_delete["id"] == delete_material_id
+                        ].iloc[0]
+
+                        st.write(
+                            f"**Остаток на складе:** "
+                            f"{safe_float(selected_delete_material.get('stock_quantity', 0)):.4f}"
+                        )
+
+                        delete_confirm = st.checkbox(
+                            "Я подтверждаю, что хочу удалить выбранный материал.",
+                            key=f"safe_delete_material_confirm_{delete_material_id}"
+                        )
+
+                        if st.button(
+                            "Удалить материал",
+                            key=f"safe_delete_material_button_{delete_material_id}",
+                            disabled=not delete_confirm,
+                            use_container_width=True
+                        ):
+                            try:
+                                # Find all real foreign-key references to materials dynamically.
+                                refs = run_query(
+                                    """
+                                    SELECT
+                                        n.nspname AS schema_name,
+                                        c.relname AS table_name,
+                                        a.attname AS column_name
+                                    FROM pg_constraint con
+                                    JOIN pg_class c ON c.oid = con.conrelid
+                                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                                    JOIN unnest(con.conkey) WITH ORDINALITY AS ck(attnum, ord) ON TRUE
+                                    JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ck.attnum
+                                    WHERE con.contype = 'f'
+                                      AND con.confrelid = 'reklet.materials'::regclass
+                                      AND n.nspname = 'reklet'
+                                    ORDER BY c.relname, a.attname
+                                    """,
+                                    fetch=True
+                                )
+
+                                dependencies = []
+                                if not refs.empty:
+                                    for _, ref in refs.iterrows():
+                                        table_name = str(ref["table_name"])
+                                        column_name = str(ref["column_name"])
+                                        count_df = run_query(
+                                            f"SELECT COUNT(*) AS cnt FROM reklet.{table_name} WHERE {column_name}=%s",
+                                            (delete_material_id,),
+                                            fetch=True
+                                        )
+                                        cnt = safe_int(count_df.iloc[0]["cnt"]) if not count_df.empty else 0
+                                        if cnt > 0:
+                                            dependencies.append(f"{table_name} ({cnt})")
+
+                                stock_qty = safe_float(selected_delete_material.get("stock_quantity", 0))
+
+                                if stock_qty > 0:
+                                    st.error(
+                                        "Удаление запрещено: у материала есть остаток на складе "
+                                        f"({stock_qty:.4f}). Сначала списание/удаление остатка."
+                                    )
+                                elif dependencies:
+                                    st.error(
+                                        "Удаление запрещено: материал уже используется в системе. "
+                                        "Связанные записи: " + ", ".join(dependencies)
+                                    )
+                                else:
+                                    run_transaction([
+                                        (
+                                            "DELETE FROM reklet.materials WHERE id=%s",
+                                            (delete_material_id,)
+                                        )
+                                    ])
+                                    st.success(
+                                        f"Материал «{selected_delete_material['name']}» безопасно удалён."
+                                    )
+                                    st.rerun()
+                            except Exception as e:
+                                st.error("Материал не удалён. Операция отменена.")
+                                st.code(str(e))
+
             # --------------------------------------------------------
             # КАТЕГОРИИ МАТЕРИАЛОВ — раскрывающийся блок
             # --------------------------------------------------------
