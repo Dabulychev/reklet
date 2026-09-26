@@ -95,16 +95,28 @@ def run_query(query, params=None, fetch=False):
 
         conn = get_connection()
 
+        # Streamlit caches the psycopg2 connection as a resource. Supabase/Supavisor
+        # can close an idle pooled connection; in that case the cached object must
+        # be discarded before asking Streamlit for a replacement.
+        if getattr(conn, "closed", 0):
+            try:
+                get_connection.clear()
+            except Exception:
+                pass
+            conn = get_connection()
+
         try:
             cursor = conn.cursor()
         except (psycopg2.InterfaceError, psycopg2.OperationalError):
-            # Cached connection became stale. No SQL has executed yet,
-            # so reconnecting here cannot duplicate a write.
+            # The cached connection became stale before any SQL was executed.
             try:
                 conn.close()
             except Exception:
                 pass
-
+            try:
+                get_connection.clear()
+            except Exception:
+                pass
             conn = get_connection()
             cursor = conn.cursor()
 
@@ -158,11 +170,23 @@ def run_transaction(statements):
     cursor = None
     try:
         conn = get_connection()
+
+        if getattr(conn, "closed", 0):
+            try:
+                get_connection.clear()
+            except Exception:
+                pass
+            conn = get_connection()
+
         try:
             cursor = conn.cursor()
         except (psycopg2.InterfaceError, psycopg2.OperationalError):
             try:
                 conn.close()
+            except Exception:
+                pass
+            try:
+                get_connection.clear()
             except Exception:
                 pass
             conn = get_connection()
