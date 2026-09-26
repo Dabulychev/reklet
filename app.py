@@ -4,6 +4,7 @@ import psycopg2
 from html import escape
 
 from core.db import get_connection, run_query, run_transaction
+from core.formatting import safe_int, safe_float, money
 
 
 # ============================================================
@@ -772,49 +773,15 @@ except Exception as e:
 # HELPER FUNCTIONS
 # ============================================================
 
-def safe_int(value, default=0):
-
-    try:
-
-        if pd.isna(value):
-
-            return default
-
-        return int(value)
-
-    except Exception:
-
-        return default
 
 
-def safe_float(value, default=0.0):
 
-    try:
-
-        if pd.isna(value):
-
-            return default
-
-        return float(value)
-
-    except Exception:
-
-        return default
 
 
 def data_editor_ru(df, **kwargs):
     return st.data_editor(df, **kwargs)
 
 
-def money(value):
-
-    try:
-
-        return f"{float(value):,.2f}"
-
-    except Exception:
-
-        return "0.00"
 
 
 def printable_html(title, df=None, body_html=None, subtitle=None):
