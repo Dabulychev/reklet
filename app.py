@@ -7,6 +7,7 @@ from core.db import get_connection, run_query, run_transaction
 from core.formatting import safe_int, safe_float, money
 from core.printing import printable_html, render_print_html
 from core.ui import data_editor_ru, render_button_nav
+from repositories.clients import get_clients
 
 
 # ============================================================
@@ -782,24 +783,7 @@ except Exception as e:
 # DATA FUNCTIONS
 # ============================================================
 
-def get_clients():
 
-    return run_query(
-        """
-        SELECT
-            id,
-            name,
-            phone,
-            address,
-            email,
-            website,
-            notes,
-            contact_info
-        FROM reklet.clients
-        ORDER BY name
-        """,
-        fetch=True
-    )
 
 
 def get_objects():
