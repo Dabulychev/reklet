@@ -4812,9 +4812,15 @@ elif menu == "Склад материалов":
                             if release>=res-1e-9: statements.append(("DELETE FROM reklet.material_reservations WHERE object_id=%s AND material_id=%s",(object_id,mid)))
                             else: statements.append(("UPDATE reklet.material_reservations SET quantity_reserved=quantity_reserved-%s,updated_at=timezone('utc'::text,now()) WHERE object_id=%s AND material_id=%s",(release,object_id,mid)))
                             statements.append(("INSERT INTO reklet.material_reservation_transactions(object_id,material_id,operation_type,quantity) VALUES (%s,%s,'release',%s)",(object_id,mid,release)))
-                    if not selected: st.info("Выберите материал и количество.")
-                    elif errors: st.error("Резерв не изменён:\n"+"\n".join(errors))
-                    else: run_transaction(statements); st.success("Резерв материалов обновлён."); st.session_state.pop(f"material_reservation_editor_v3_{object_id}",None); st.rerun()
+                    if selected.empty:
+                        st.info("Выберите материал и количество.")
+                    elif errors:
+                        st.error("Резерв не изменён:\n" + "\n".join(errors))
+                    else:
+                        run_transaction(statements)
+                        st.success("Резерв материалов обновлён.")
+                        st.session_state.pop(f"material_reservation_editor_v3_{object_id}", None)
+                        st.rerun()
 
     elif active_material_section == "purchase":
         st.subheader("Закупка материалов")
@@ -5501,7 +5507,7 @@ elif menu == "Производство":
             else:
                 ensure_object_item_material_costs(object_id)
                 # Table is informational; the action is performed for one selected item below.
-                production_view = production_df.copy()
+                production_view = production_df[["id","item_name","quantity_needed","qty_new","qty_production","manufactured_total"]].copy()
                 production_view.columns=["ID","Изделие","Заказано","Осталось запустить","В производстве","Изготовлено всего"]
                 st.dataframe(production_view,width="stretch",hide_index=True)
                 render_print_html(f"Производственное задание — {selected_object}",production_view,f"print_production_v4_{object_id}")
