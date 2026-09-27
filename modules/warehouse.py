@@ -139,6 +139,12 @@ def render_warehouse():
                             list(supplier_map.keys()),
                             key="add_material_suppliers_expander_v2"
                         )
+                        preferred_options = ["— Не выбран —"] + chosen_suppliers
+                        preferred_supplier = st.selectbox(
+                            "Привилегированный / предпочтительный поставщик",
+                            preferred_options,
+                            key="add_material_preferred_supplier_expander_v2"
+                        )
                         submit=st.form_submit_button("Добавить материал",use_container_width=True)
                         if submit:
                             if not name.strip() or not unit_map:
@@ -154,6 +160,12 @@ def render_warehouse():
                                     "waste":waste,
                                     "supplier_ids":[supplier_map[x] for x in chosen_suppliers],
                                     "supplier_labels":chosen_suppliers,
+                                    "preferred_supplier_id": (
+                                        supplier_map[preferred_supplier]
+                                        if preferred_supplier != "— Не выбран —"
+                                        else None
+                                    ),
+                                    "preferred_supplier_label": preferred_supplier,
                                 }
 
                     pending_create=st.session_state.get("pending_material_create_list_expander_v2")
@@ -166,6 +178,8 @@ def render_warehouse():
                         st.write(f"**Единица:** {pending_create['unit_name']}")
                         st.write(f"**Цена:** {pending_create['price']:.2f}  **Коэффициент отходов:** {pending_create['waste']:.2f}")
                         st.write(f"**Поставщики:** {suppliers_text}")
+                        preferred_text = pending_create.get("preferred_supplier_label") or "не выбран"
+                        st.write(f"**Привилегированный / предпочтительный поставщик:** {preferred_text}")
                         c1,c2=st.columns(2)
                         with c1:
                             confirm=st.button("Подтвердить добавление",key="confirm_material_create_list_expander_v2",use_container_width=True,type="primary")
@@ -185,12 +199,26 @@ def render_warehouse():
                                     (pending_create["name"],pending_create["unit_id"],cid,pending_create["price"],pending_create["stock"],pending_create["waste"])
                                 )
                                 material_id=int(cur.fetchone()[0])
+                                preferred_id = pending_create.get("preferred_supplier_id")
                                 for sid in pending_create["supplier_ids"]:
+                                    is_preferred = bool(preferred_id) and int(sid) == int(preferred_id)
                                     cur.execute(
-                                        """INSERT INTO reklet.material_suppliers(material_id,supplier_id,purchase_price)
-                                           VALUES (%s,%s,%s)
-                                           ON CONFLICT(material_id,supplier_id) DO UPDATE SET purchase_price=EXCLUDED.purchase_price""",
-                                        (material_id,sid,pending_create["price"])
+                                        """INSERT INTO reklet.material_suppliers(material_id,supplier_id,purchase_price,is_preferred)
+                                           VALUES (%s,%s,%s,%s)
+                                           ON CONFLICT(material_id,supplier_id) DO UPDATE SET
+                                               purchase_price=EXCLUDED.purchase_price,
+                                               is_preferred=EXCLUDED.is_preferred""",
+                                        (material_id,sid,pending_create["price"],is_preferred)
+                                    )
+                                if preferred_id:
+                                    cur.execute(
+                                        "UPDATE reklet.materials SET supplier_id=%s WHERE id=%s",
+                                        (preferred_id, material_id)
+                                    )
+                                elif pending_create["supplier_ids"]:
+                                    cur.execute(
+                                        "UPDATE reklet.materials SET supplier_id=%s WHERE id=%s",
+                                        (pending_create["supplier_ids"][0], material_id)
                                     )
                                 conn.commit()
                             except Exception:
