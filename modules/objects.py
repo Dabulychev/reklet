@@ -311,7 +311,7 @@ def render_objects():
                                         c1, c2 = st.columns([1, 2], gap="small")
                                         with c1: st.markdown(f"**{label}**")
                                         with c2:
-                                            default_date = original_dates[field_name] or pd.Timestamp.today().date()
+                                            default_date = original_dates[field_name]
                                             edited_dates[field_name] = st.date_input(
                                                 label, value=default_date,
                                                 label_visibility="collapsed", key=field_key
