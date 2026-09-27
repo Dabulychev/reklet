@@ -665,7 +665,11 @@ def render_objects():
                 else:
                     display_items = current_items.copy()
                     stage_columns = [
-                        "quantity", "qty_production", "qty_ready", "qty_shipped",
+                        # The item remains in the database, but is hidden from the
+                        # composition table when both current order quantities and
+                        # all physical stage quantities are zero.
+                        "quantity_needed", "quantity",
+                        "qty_production", "qty_ready", "qty_shipped",
                         "qty_arrived", "qty_installing", "qty_installed"
                     ]
                     numeric = display_items[stage_columns].apply(pd.to_numeric, errors="coerce").fillna(0)
