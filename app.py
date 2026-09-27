@@ -34,6 +34,7 @@ from database.migrations import (
 from services.material_planning import get_object_material_planning
 from services.material_reconciliation import build_auto_material_reconciliation_statements
 from modules.warehouse import warehouse_select_object
+from services.object_management import calculate_object_management_change
 from modules.objects import select_object_by_customer
 from modules.reports import movement_options
 
@@ -1306,9 +1307,6 @@ elif menu == "Объекты":
                                 "installing": safe_int(base["_qty_installing"]),
                                 "installed": safe_int(base["_qty_installed"]),
                             }
-                            state = old_state.copy()
-                            commands = []
-                            newly_produced_from_new = [0]
 
                             correction = safe_int(r["1.2 Коррекция"])
                             manufactured_action = safe_int(r["2.2 Изготовлено"])
@@ -1316,123 +1314,24 @@ elif menu == "Объекты":
                             delivered_action = safe_int(r["4.2 Доставлен"])
                             installed_action = safe_int(r["5.2 Установлено"])
 
-                            if any(v < 0 for v in (
+                            result = calculate_object_management_change(
+                                old_state,
+                                correction,
                                 manufactured_action,
                                 shipped_action,
                                 delivered_action,
                                 installed_action,
-                            )):
-                                errors.append(f"{name}: действия производства/склада/транспорта/монтажа не могут быть отрицательными.")
-                                continue
-
-                            # Order correction changes only the unprocessed part.
-                            # A reduction cannot invalidate quantities already in the chain.
-                            if correction < 0:
-                                decrease = -correction
-                                if decrease > state["new"]:
-                                    errors.append(
-                                        f"{name}: нельзя уменьшить заказ на {decrease}; "
-                                        f"необработанный остаток заказа только {state['new']}."
-                                    )
-                                    continue
-                                state["order"] -= decrease
-                                state["new"] -= decrease
-                            elif correction > 0:
-                                state["order"] += correction
-                                state["new"] += correction
-
-                            def complete_production(qty):
-                                """Complete exactly qty units and put them on the warehouse."""
-                                if qty <= 0:
-                                    return
-
-                                from_production = min(qty, state["production"])
-                                from_new = qty - from_production
-
-                                if from_new > state["new"]:
-                                    available = state["production"] + state["new"]
-                                    raise ValueError(
-                                        f"для изготовления {qty} шт. доступно только {available} шт."
-                                    )
-
-                                if from_production:
-                                    state["production"] -= from_production
-                                if from_new:
-                                    state["new"] -= from_new
-                                    newly_produced_from_new[0] += from_new
-
-                                state["ready"] += qty
-                                commands.append(("production", qty))
-
-                            def ensure_ready(qty):
-                                """Ensure qty is physically available in the warehouse."""
-                                shortage = max(qty - state["ready"], 0)
-                                if shortage:
-                                    complete_production(shortage)
-
-                            def move_to_shipped(qty):
-                                ensure_ready(qty)
-                                state["ready"] -= qty
-                                state["shipped"] += qty
-                                commands.append(("ship", qty))
-
-                            def ensure_shipped(qty):
-                                """Ensure qty is physically in transport."""
-                                shortage = max(qty - state["shipped"], 0)
-                                if shortage:
-                                    move_to_shipped(shortage)
-
-                            def move_to_arrived(qty):
-                                ensure_shipped(qty)
-                                state["shipped"] -= qty
-                                state["arrived"] += qty
-                                commands.append(("arrive", qty))
-
-                            def ensure_arrived(qty):
-                                """Ensure qty is physically received at the object."""
-                                shortage = max(qty - state["arrived"], 0)
-                                if shortage:
-                                    move_to_arrived(shortage)
-
-                            def install_qty(qty):
-                                ensure_arrived(qty)
-                                state["arrived"] -= qty
-                                state["installed"] += qty
-                                commands.append(("install", qty))
-
-                            # Every green field is a one-time movement command.
-                            # Missing upstream stock is generated automatically from the
-                            # same order, but the order itself is never silently increased.
-                            action_failed = False
-                            for action_name, action_qty, action_fn in (
-                                ("изготовление", manufactured_action, complete_production),
-                                ("отгрузка", shipped_action, move_to_shipped),
-                                ("доставка", delivered_action, move_to_arrived),
-                                ("установка", installed_action, install_qty),
-                            ):
-                                if not action_qty:
-                                    continue
-                                try:
-                                    action_fn(action_qty)
-                                except ValueError as exc:
-                                    errors.append(f"{name}: {action_name} {action_qty} шт. — {exc}")
-                                    action_failed = True
-                                    break
-
-                            if action_failed:
-                                continue
-
-                            # Rebuild the unprocessed remainder from the order identity.
-                            allocated = (
-                                state["production"] + state["ready"] + state["shipped"] +
-                                state["arrived"] + state["installing"] + state["installed"]
                             )
-                            if allocated > state["order"]:
+
+                            if result["error"]:
                                 errors.append(
-                                    f"{name}: итоговое количество {allocated} шт. превышает заказ {state['order']} шт."
+                                    f"{name}: {result['error']}"
                                 )
                                 continue
-                            state["new"] = state["order"] - allocated
+
+                            state = result["state"]
+                            commands = result["commands"]
+                            newly_produced_from_new = result["newly_produced_from_new"]
 
                             changed = (
                                 state != old_state or
