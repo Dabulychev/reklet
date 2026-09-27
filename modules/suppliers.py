@@ -10,6 +10,66 @@ from repositories.materials import (
 )
 from repositories.suppliers import get_suppliers
 
+def _render_supplier_correction(suppliers):
+
+        st.subheader("Коррекция поставщиков")
+        if suppliers.empty:
+            st.info("Поставщиков нет.")
+        else:
+            supplier_map={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in suppliers.iterrows()}
+            selected_label=st.selectbox("Поставщик",list(supplier_map.keys()),key="supplier_edit_select")
+            selected_id=supplier_map[selected_label]
+            row=suppliers[suppliers["id"]==selected_id].iloc[0]
+            with st.form("edit_supplier_form"):
+                name=st.text_input("Название",value=str(row.get("name") or ""))
+                types=["material_supplier","subcontractor","both"]
+                current_type=str(row.get("type") or "material_supplier")
+                supplier_type=st.selectbox("Тип поставщика",types,index=types.index(current_type) if current_type in types else 0)
+                contact_person=st.text_input("Контактное лицо",value=str(row.get("contact_person") or ""))
+                phone=st.text_input("Телефон",value=str(row.get("phone") or ""))
+                email=st.text_input("Email",value=str(row.get("email") or ""))
+                category=st.text_input("Категория",value=str(row.get("category") or ""))
+                conditions=st.text_area("Условия",value=str(row.get("conditions") or ""))
+                contact_info=st.text_area("Контактная информация",value=str(row.get("contact_info") or ""))
+                if st.form_submit_button("Сохранить изменения"):
+                    if not name.strip():
+                        st.warning("Название поставщика не может быть пустым.")
+                    else:
+                        run_query(
+                            """UPDATE reklet.suppliers SET name=%s,type=%s,contact_info=%s,
+                                      contact_person=%s,phone=%s,email=%s,category=%s,conditions=%s
+                               WHERE id=%s""",
+                            (name.strip(),supplier_type,contact_info.strip() or None,
+                             contact_person.strip() or None,phone.strip() or None,email.strip() or None,
+                             category.strip() or None,conditions.strip() or None,selected_id)
+                        )
+                        st.success("Данные поставщика изменены.")
+                        st.rerun()
+
+            with st.expander("Удаление поставщика",expanded=False):
+                st.warning(
+                    "Безопасное удаление: поставщик не будет удалён, "
+                    "если он используется материалами или движениями."
+                )
+                confirm=st.checkbox("Я подтверждаю удаление выбранного поставщика.",key="confirm_supplier_delete")
+                if st.button("Удалить поставщика",key="delete_supplier_safe",disabled=not confirm):
+                    used=run_query(
+                        """SELECT
+                             (SELECT COUNT(*) FROM reklet.material_suppliers WHERE supplier_id=%s) AS material_links,
+                             (SELECT COUNT(*) FROM reklet.material_transactions WHERE supplier_id=%s) AS transactions,
+                             (SELECT COUNT(*) FROM reklet.purchase_orders WHERE supplier_id=%s) AS purchase_orders""",
+                        (selected_id,selected_id,selected_id),fetch=True
+                    )
+                    if int(used.iloc[0]["material_links"])>0 or int(used.iloc[0]["transactions"])>0 or int(used.iloc[0]["purchase_orders"])>0:
+                        st.error("Удаление невозможно: поставщик используется в связанных данных.")
+                    else:
+                        run_query("DELETE FROM reklet.suppliers WHERE id=%s",(selected_id,))
+                        st.success("Поставщик удалён.")
+                        st.rerun()
+
+    # ============================================================
+
+
 def render_suppliers():
     st.header("Поставщики")
 
@@ -18,8 +78,7 @@ def render_suppliers():
             "Перечень поставщиков",
             "Создать поставщика",
             "Материалы поставщика",
-            "Поиск поставщика",
-            "Коррекция и удаление поставщиков"
+            "Поиск поставщика"
         ],
         "suppliers_navigation",
         "suppliers_nav",
@@ -36,6 +95,9 @@ def render_suppliers():
             supplier_view = suppliers[display_cols].copy()
             st.dataframe(supplier_view,width="stretch",hide_index=True)
             render_print_html("Перечень поставщиков", supplier_view, "print_supplier_list")
+
+            with st.expander("Коррекция поставщиков",expanded=False):
+                _render_supplier_correction(suppliers)
 
     elif supplier_sub=="Создать поставщика":
         st.subheader("Создать поставщика")
@@ -266,60 +328,3 @@ def render_suppliers():
                         subtitle=f"Категория: {search_category}"
                     )
 
-    elif supplier_sub=="Коррекция и удаление поставщиков":
-        st.subheader("Коррекция поставщиков")
-        if suppliers.empty:
-            st.info("Поставщиков нет.")
-        else:
-            supplier_map={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in suppliers.iterrows()}
-            selected_label=st.selectbox("Поставщик",list(supplier_map.keys()),key="supplier_edit_select")
-            selected_id=supplier_map[selected_label]
-            row=suppliers[suppliers["id"]==selected_id].iloc[0]
-            with st.form("edit_supplier_form"):
-                name=st.text_input("Название",value=str(row.get("name") or ""))
-                types=["material_supplier","subcontractor","both"]
-                current_type=str(row.get("type") or "material_supplier")
-                supplier_type=st.selectbox("Тип поставщика",types,index=types.index(current_type) if current_type in types else 0)
-                contact_person=st.text_input("Контактное лицо",value=str(row.get("contact_person") or ""))
-                phone=st.text_input("Телефон",value=str(row.get("phone") or ""))
-                email=st.text_input("Email",value=str(row.get("email") or ""))
-                category=st.text_input("Категория",value=str(row.get("category") or ""))
-                conditions=st.text_area("Условия",value=str(row.get("conditions") or ""))
-                contact_info=st.text_area("Контактная информация",value=str(row.get("contact_info") or ""))
-                if st.form_submit_button("Сохранить изменения"):
-                    if not name.strip():
-                        st.warning("Название поставщика не может быть пустым.")
-                    else:
-                        run_query(
-                            """UPDATE reklet.suppliers SET name=%s,type=%s,contact_info=%s,
-                                      contact_person=%s,phone=%s,email=%s,category=%s,conditions=%s
-                               WHERE id=%s""",
-                            (name.strip(),supplier_type,contact_info.strip() or None,
-                             contact_person.strip() or None,phone.strip() or None,email.strip() or None,
-                             category.strip() or None,conditions.strip() or None,selected_id)
-                        )
-                        st.success("Данные поставщика изменены.")
-                        st.rerun()
-
-            with st.expander("Удаление поставщика",expanded=False):
-                st.warning(
-                    "Безопасное удаление: поставщик не будет удалён, "
-                    "если он используется материалами или движениями."
-                )
-                confirm=st.checkbox("Я подтверждаю удаление выбранного поставщика.",key="confirm_supplier_delete")
-                if st.button("Удалить поставщика",key="delete_supplier_safe",disabled=not confirm):
-                    used=run_query(
-                        """SELECT
-                             (SELECT COUNT(*) FROM reklet.material_suppliers WHERE supplier_id=%s) AS material_links,
-                             (SELECT COUNT(*) FROM reklet.material_transactions WHERE supplier_id=%s) AS transactions,
-                             (SELECT COUNT(*) FROM reklet.purchase_orders WHERE supplier_id=%s) AS purchase_orders""",
-                        (selected_id,selected_id,selected_id),fetch=True
-                    )
-                    if int(used.iloc[0]["material_links"])>0 or int(used.iloc[0]["transactions"])>0 or int(used.iloc[0]["purchase_orders"])>0:
-                        st.error("Удаление невозможно: поставщик используется в связанных данных.")
-                    else:
-                        run_query("DELETE FROM reklet.suppliers WHERE id=%s",(selected_id,))
-                        st.success("Поставщик удалён.")
-                        st.rerun()
-
-    # ============================================================
