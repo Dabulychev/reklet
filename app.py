@@ -4,6 +4,7 @@ from html import escape
 
 from core.db import get_connection, run_query, run_transaction
 from core.formatting import safe_int, safe_float, money
+from core.dates import as_date
 from core.printing import printable_html, render_print_html
 from core.ui import data_editor_ru, render_button_nav
 from repositories.clients import get_clients
@@ -34,6 +35,7 @@ from services.material_planning import get_object_material_planning
 from services.material_reconciliation import build_auto_material_reconciliation_statements
 from modules.warehouse import warehouse_select_object
 from modules.objects import select_object_by_customer
+from modules.reports import movement_options
 
 
 # ============================================================
@@ -637,12 +639,6 @@ elif menu == "Объекты":
                             st.warning("Выбранный объект не найден.")
                         else:
                             original = object_data.iloc[0].copy()
-
-                            def as_date(value):
-                                if value is None or pd.isna(value):
-                                    return None
-                                ts = pd.to_datetime(value, errors="coerce")
-                                return None if pd.isna(ts) else ts.date()
 
                             original_dates = {
                                 "contract_date": as_date(original.get("contract_date")),
@@ -4720,29 +4716,16 @@ elif menu == "Отчёты":
         if movements.empty:
             st.info("Транзакций в базе данных пока нет.")
         else:
-            def movement_options(column, first_label="Все"):
-                vals = (
-                    movements[column]
-                    .fillna("")
-                    .astype(str)
-                    .replace("", pd.NA)
-                    .dropna()
-                    .drop_duplicates()
-                    .sort_values()
-                    .tolist()
-                )
-                return [first_label] + vals
-
             f1, f2, f3 = st.columns(3)
             f4, f5, f6 = st.columns(3)
 
             with f1:
                 movement_client = st.selectbox(
-                    "Заказчик", movement_options("client_name"), key="movement_filter_client"
+                    "Заказчик", movement_options(movements, "client_name"), key="movement_filter_client"
                 )
             with f2:
                 movement_object = st.selectbox(
-                    "Объект", movement_options("object_name"), key="movement_filter_object"
+                    "Объект", movement_options(movements, "object_name"), key="movement_filter_object"
                 )
             with f3:
                 movement_section = st.selectbox(
@@ -4752,15 +4735,15 @@ elif menu == "Отчёты":
                 )
             with f4:
                 movement_supplier = st.selectbox(
-                    "Поставщик", movement_options("supplier_name"), key="movement_filter_supplier"
+                    "Поставщик", movement_options(movements, "supplier_name"), key="movement_filter_supplier"
                 )
             with f5:
                 movement_material = st.selectbox(
-                    "Материал", movement_options("material_name"), key="movement_filter_material"
+                    "Материал", movement_options(movements, "material_name"), key="movement_filter_material"
                 )
             with f6:
                 movement_product = st.selectbox(
-                    "Изделие", movement_options("product_name"), key="movement_filter_product"
+                    "Изделие", movement_options(movements, "product_name"), key="movement_filter_product"
                 )
 
             filtered = movements.copy()
