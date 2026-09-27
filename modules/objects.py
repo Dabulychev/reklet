@@ -307,15 +307,14 @@ def _render_object_data(object_id):
                     (SELECT COUNT(*) FROM reklet.transport_transactions WHERE object_id=%s) AS transport_transactions,
                     (SELECT COUNT(*) FROM reklet.installation_transactions WHERE object_id=%s) AS installation_transactions,
                     (SELECT COUNT(*) FROM reklet.material_transactions WHERE object_id=%s) AS material_transactions,
-                    (SELECT COUNT(*) FROM reklet.material_reservations WHERE object_id=%s) AS material_reservations,
                     (SELECT COUNT(*) FROM reklet.purchase_order_items WHERE object_id=%s) AS purchase_order_items,
                     (SELECT COUNT(*) FROM reklet.material_consumption WHERE object_id=%s) AS material_consumption
-                """, (object_id,)*10, fetch=True).iloc[0]
+                """, (object_id,)*9, fetch=True).iloc[0]
             labels={
                 "object_items":"изделия объекта", "production_transactions":"история производства",
                 "finished_goods":"готовая продукция", "finished_goods_transactions":"история движения готовой продукции",
                 "transport_transactions":"история транспортировки", "installation_transactions":"история монтажа",
-                "material_transactions":"движения материалов по объекту", "material_reservations":"резерв материалов по объекту",
+                "material_transactions":"движения материалов по объекту",
                 "purchase_order_items":"закупки материалов по объекту", "material_consumption":"списание материалов в производстве"
             }
             blocking=[label for key,label in labels.items() if safe_int(refs.get(key,0))>0]
