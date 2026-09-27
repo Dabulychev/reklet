@@ -4,21 +4,42 @@ from core.db import run_query, run_transaction
 from core.printing import render_print_html
 from core.formatting import safe_int
 from database.migrations import ensure_stage_movement_tables
-from repositories.objects import get_stage_objects
+from modules.stage_filter_helper import get_stage_work_items, render_stage_object_filters
 
 
 def render_transport():
 
     st.header("Транспорт и логистика")
     ensure_stage_movement_tables()
-    objects=get_stage_objects("transport")
-    if objects.empty:
+    stage_objects, filtered_objects, selected_client, selected_object, object_id = render_stage_object_filters(
+        "transport", "transport"
+    )
+    if stage_objects.empty:
         st.success("В транспорте нет незавершённых заданий.")
+    elif selected_object == "Все объекты":
+        overview = get_stage_work_items("transport", filtered_objects["id"].tolist())
+        if overview.empty:
+            st.info("Для выбранного отбора нет изделий в пути.")
+        else:
+            overview["in_transit"] = (
+                overview["qty_shipped"] - overview["qty_arrived"]
+            ).clip(lower=0)
+            view = overview[[
+                "client_name", "object_name", "item_name", "quantity_needed",
+                "qty_shipped", "qty_arrived", "in_transit"
+            ]].copy()
+            view.columns = [
+                "Заказчик", "Объект", "Изделие", "Заказано",
+                "Отправлено", "Доставлено", "В пути"
+            ]
+            st.dataframe(view, width="stretch", hide_index=True)
+            render_print_html(
+                "Транспорт — актуальные задания",
+                view,
+                "print_transport_all"
+            )
+            st.caption("Для выполнения доставки выберите конкретный объект в отборе выше.")
     else:
-        object_options=[f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}" for _,r in objects.iterrows()]
-        object_map={x:int(x.split(" — ")[0]) for x in object_options}
-        selected_object=st.selectbox("Объект",object_options,key="transport_object_filter")
-        object_id=object_map[selected_object]
         df=run_query("""SELECT oi.id,oi.item_name,oi.quantity_needed AS ordered,COALESCE(oi.qty_shipped,0) AS shipped,COALESCE(oi.qty_arrived,0) AS arrived,GREATEST(COALESCE(oi.qty_shipped,0)-COALESCE(oi.qty_arrived,0),0) AS in_transit FROM reklet.object_items oi WHERE oi.object_id=%s AND COALESCE(oi.qty_shipped,0)>COALESCE(oi.qty_arrived,0) ORDER BY oi.id""",(object_id,),fetch=True)
         if df.empty:
             st.success("Для выбранного объекта нет изделий, ожидающих доставки.")
