@@ -4,14 +4,14 @@ from core.db import run_query, run_transaction
 from core.formatting import safe_int
 from core.printing import render_print_html
 from database.migrations import ensure_stage_movement_tables
-from repositories.objects import get_objects
+from repositories.objects import get_stage_objects
 
 
 def render_installation():
 
     st.header("Монтаж")
     ensure_stage_movement_tables()
-    objects=get_objects().sort_values("id", ascending=False).copy()
+    objects=get_stage_objects("installation").copy()
     if objects.empty:
         st.info("Объектов нет.")
     else:
