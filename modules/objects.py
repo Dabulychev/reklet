@@ -675,6 +675,11 @@ def render_objects():
                                 expected_ids = {safe_int(x) for x in selected_rows["ID"].tolist()}
                                 if expected_ids.issubset(saved_ids):
                                     st.success(f"Добавлено изделий: {len(selected_rows)}.")
+                                    # Сбрасываем состояние редактора, чтобы после
+                                    # выполнения таблица заново получила актуальное
+                                    # значение «Заказано», а «Количество» стало 0.
+                                    st.session_state.pop(f"add_items_editor_{object_id}", None)
+                                    st.rerun()
                                 else:
                                     st.error("Операция выполнена не полностью: не все изделия появились в составе объекта.")
                             except Exception as e:
@@ -1492,15 +1497,37 @@ def render_objects():
                 if items.empty:
                     st.info("Для этого объекта ещё не созданы изделия.")
                 else:
-                    display = items[["item_name", "quantity"]].copy().reset_index(drop=True)
-                    display.insert(0, "Nп/п", range(1, len(display) + 1))
-                    display.columns = ["Nп/п", "Изделие", "Количество"]
-                    st.dataframe(display, width="stretch", hide_index=True)
-                    render_print_html(
-                        f"Состав объекта — {str(object_row.get('object_name', '') or '').strip()}",
-                        display,
-                        f"print_object_composition_{object_id}"
-                    )
+                    # Позиция без заказа и без каких-либо операций больше не
+                    # является актуальной частью состава объекта. Из БД её не
+                    # удаляем — она должна сохраняться в истории управления.
+                    quantity_columns = [
+                        "quantity_needed",
+                        "qty_new",
+                        "qty_production",
+                        "qty_ready",
+                        "qty_shipped",
+                        "qty_arrived",
+                        "qty_installing",
+                        "qty_installed",
+                    ]
+                    numeric = items[quantity_columns].apply(
+                        pd.to_numeric, errors="coerce"
+                    ).fillna(0)
+                    active_mask = numeric.ne(0).any(axis=1)
+                    display_items = items.loc[active_mask].copy()
+
+                    if display_items.empty:
+                        st.info("В составе объекта нет актуальных изделий.")
+                    else:
+                        display = display_items[["item_name", "quantity"]].copy().reset_index(drop=True)
+                        display.insert(0, "Nп/п", range(1, len(display) + 1))
+                        display.columns = ["Nп/п", "Изделие", "Количество"]
+                        st.dataframe(display, width="stretch", hide_index=True)
+                        render_print_html(
+                            f"Состав объекта — {str(object_row.get('object_name', '') or '').strip()}",
+                            display,
+                            f"print_object_composition_{object_id}"
+                        )
 
         # ------------------------------------------------------------
         # ПОТРЕБНОСТЬ В МАТЕРИАЛАХ
