@@ -4,21 +4,37 @@ from core.db import run_query, run_transaction
 from core.formatting import safe_int
 from core.printing import render_print_html
 from database.migrations import ensure_stage_movement_tables
-from repositories.objects import get_stage_objects
+from modules.stage_filter_helper import get_stage_work_items, render_stage_object_filters
 
 
 def render_installation():
 
     st.header("Монтаж")
     ensure_stage_movement_tables()
-    objects=get_stage_objects("installation").copy()
-    if objects.empty:
-        st.info("Объектов нет.")
+    stage_objects, filtered_objects, selected_client, selected_object, object_id = render_stage_object_filters(
+        "installation", "installation"
+    )
+    if stage_objects.empty:
+        st.success("На монтаже нет незавершённых заданий.")
+    elif selected_object == "Все объекты":
+        overview = get_stage_work_items("installation", filtered_objects["id"].tolist())
+        if overview.empty:
+            st.info("Для выбранного отбора нет изделий, доступных для монтажа.")
+        else:
+            view = overview[[
+                "client_name", "object_name", "item_name", "quantity_needed", "qty_arrived", "qty_installing", "qty_installed"
+            ]].copy()
+            view.columns = [
+                "Заказчик", "Объект", "Изделие", "Заказано", "Прибыло", "В монтаже", "Смонтировано"
+            ]
+            st.dataframe(view, width="stretch", hide_index=True)
+            render_print_html(
+                "Монтаж — актуальные задания",
+                view,
+                "print_installation_all"
+            )
+            st.caption("Для выполнения монтажа выберите конкретный объект в отборе выше.")
     else:
-        object_options=[f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}" for _,r in objects.iterrows()]
-        object_map={x:int(x.split(" — ")[0]) for x in object_options}
-        selected_object=st.selectbox("Объект",object_options,key="installation_object_filter")
-        object_id=object_map[selected_object]
         df=run_query("""SELECT oi.id,oi.item_name,oi.quantity_needed AS ordered,COALESCE(oi.qty_arrived,0) AS arrived,COALESCE(oi.qty_installing,0) AS installing,COALESCE(oi.qty_installed,0) AS installed FROM reklet.object_items oi WHERE oi.object_id=%s AND COALESCE(oi.qty_arrived,0)>0 ORDER BY oi.id""",(object_id,),fetch=True)
         if df.empty:
             st.success("Для выбранного объекта нет изделий, доступных для монтажа.")
