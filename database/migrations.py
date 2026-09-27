@@ -294,6 +294,8 @@ def ensure_material_planning_tables():
     The schema is created in a separate transaction from historical backfill.
     This is intentionally idempotent so a deployment can recover automatically
     when an earlier version of the app did not create all warehouse tables.
+    Reservation workflow is retired; any legacy reservation tables in PostgreSQL
+    are deliberately left untouched and are no longer created, read, or written.
     """
     # Do a very cheap existence check even when a previous Streamlit run marked
     # the migration as ready. This protects a long-lived session if a table/column
@@ -302,12 +304,10 @@ def ensure_material_planning_tables():
         check = run_query(
             """
             SELECT
-                to_regclass('reklet.material_reservations') AS material_reservations,
                 to_regclass('reklet.purchase_orders') AS purchase_orders,
                 to_regclass('reklet.purchase_order_items') AS purchase_order_items,
                 to_regclass('reklet.material_consumption') AS material_consumption,
-                to_regclass('reklet.object_item_material_costs') AS object_item_material_costs,
-                to_regclass('reklet.material_reservation_transactions') AS material_reservation_transactions
+                to_regclass('reklet.object_item_material_costs') AS object_item_material_costs
             """,
             fetch=True,
         )
@@ -355,18 +355,6 @@ def ensure_material_planning_tables():
         pass
 
     schema_statements = [
-        ("""
-        CREATE TABLE IF NOT EXISTS reklet.material_reservations (
-            id serial4 PRIMARY KEY,
-            object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
-            material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
-            quantity_reserved numeric NOT NULL DEFAULT 0,
-            created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
-            updated_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
-            CONSTRAINT material_reservations_positive_check CHECK (quantity_reserved > 0),
-            CONSTRAINT material_reservations_unique UNIQUE (object_id, material_id)
-        )
-        """, ()),
         ("""
         CREATE TABLE IF NOT EXISTS reklet.purchase_orders (
             id serial4 PRIMARY KEY,
@@ -420,18 +408,6 @@ def ensure_material_planning_tables():
         )
         """, ()),
         ("ALTER TABLE reklet.material_consumption ADD COLUMN IF NOT EXISTS unit_cost_snapshot numeric NULL", ()),
-        ("""CREATE TABLE IF NOT EXISTS reklet.material_reservation_transactions (
-            id serial4 PRIMARY KEY,
-            object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
-            material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
-            operation_type text NOT NULL,
-            quantity numeric NOT NULL,
-            created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
-            CONSTRAINT material_reservation_transactions_type_check CHECK (operation_type IN ('reserve','release')),
-            CONSTRAINT material_reservation_transactions_quantity_check CHECK (quantity > 0)
-        )""", ()),
-        ("CREATE INDEX IF NOT EXISTS idx_material_reservations_object ON reklet.material_reservations(object_id)", ()),
-        ("CREATE INDEX IF NOT EXISTS idx_material_reservations_material ON reklet.material_reservations(material_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON reklet.purchase_orders(supplier_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_purchase_order_items_order ON reklet.purchase_order_items(purchase_order_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_purchase_order_items_object_material ON reklet.purchase_order_items(object_id, material_id)", ()),
@@ -440,8 +416,6 @@ def ensure_material_planning_tables():
         ("CREATE INDEX IF NOT EXISTS idx_material_consumption_material ON reklet.material_consumption(material_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_object_item_material_costs_item ON reklet.object_item_material_costs(object_item_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_object_item_material_costs_material ON reklet.object_item_material_costs(material_id)", ()),
-        ("CREATE INDEX IF NOT EXISTS idx_material_reservation_transactions_object ON reklet.material_reservation_transactions(object_id)", ()),
-        ("CREATE INDEX IF NOT EXISTS idx_material_reservation_transactions_material ON reklet.material_reservation_transactions(material_id)", ()),
     ]
 
     run_transaction(schema_statements)
@@ -468,6 +442,115 @@ def ensure_material_planning_tables():
             # Snapshot backfill is best-effort. The schema itself is already ready.
             pass
         st.session_state['_material_cost_snapshot_backfill_attempted'] = True
+
+
+def ensure_task_three_tables():
+    """Create persistent tables required by Tasks 1-3. Idempotent migration.
+
+    This function intentionally creates only the non-reservation Task 1-3
+    tables. Legacy reservation tables, if they already exist in PostgreSQL,
+    are left untouched and are not read or written by the application.
+    """
+    if st.session_state.get("_task_three_tables_ready"):
+        return
+
+    statements = [
+        (
+            """
+            ALTER TABLE reklet.purchase_order_items
+            ALTER COLUMN object_id DROP NOT NULL
+            """,
+            (),
+        ),
+        (
+            """
+            CREATE TABLE IF NOT EXISTS reklet.material_production_requests (
+                id serial4 PRIMARY KEY,
+                object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
+                object_item_id int4 NOT NULL REFERENCES reklet.object_items(id) ON DELETE RESTRICT,
+                material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
+                quantity_requested numeric NOT NULL,
+                quantity_supplied numeric NOT NULL DEFAULT 0,
+                status text NOT NULL DEFAULT 'sent',
+                created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+                updated_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+                notes text NULL,
+                CONSTRAINT material_production_requests_quantity_check CHECK (quantity_requested > 0),
+                CONSTRAINT material_production_requests_supplied_check CHECK (quantity_supplied >= 0 AND quantity_supplied <= quantity_requested),
+                CONSTRAINT material_production_requests_status_check CHECK (status IN ('sent','purchasing','ready','completed','cancelled'))
+            )
+            """,
+            (),
+        ),
+        (
+            """
+            CREATE TABLE IF NOT EXISTS reklet.material_waste_transactions (
+                id serial4 PRIMARY KEY,
+                material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
+                object_id int4 NULL REFERENCES reklet.objects(id) ON DELETE SET NULL,
+                source_type text NOT NULL,
+                quantity numeric NOT NULL,
+                unit_cost_snapshot numeric NOT NULL DEFAULT 0,
+                reason text NULL,
+                created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+                CONSTRAINT material_waste_source_check CHECK (source_type IN ('stock','production')),
+                CONSTRAINT material_waste_quantity_check CHECK (quantity > 0)
+            )
+            """,
+            (),
+        ),
+        (
+            """
+            CREATE TABLE IF NOT EXISTS reklet.work_time_calculations (
+                id serial4 PRIMARY KEY,
+                object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
+                distance_km numeric NOT NULL DEFAULT 0,
+                loading_minutes numeric NOT NULL DEFAULT 240,
+                road_minutes numeric NOT NULL DEFAULT 240,
+                unloading_minutes numeric NOT NULL DEFAULT 240,
+                production_minutes numeric NOT NULL DEFAULT 0,
+                installation_minutes numeric NOT NULL DEFAULT 0,
+                transport_minutes numeric NOT NULL DEFAULT 720,
+                total_minutes numeric NOT NULL DEFAULT 0,
+                calculated_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+                CONSTRAINT work_time_distance_check CHECK (distance_km >= 0),
+                CONSTRAINT work_time_minutes_check CHECK (production_minutes >= 0 AND installation_minutes >= 0 AND transport_minutes >= 0 AND total_minutes >= 0)
+            )
+            """,
+            (),
+        ),
+        (
+            """
+            CREATE TABLE IF NOT EXISTS reklet.work_time_calculation_items (
+                id serial4 PRIMARY KEY,
+                calculation_id int4 NOT NULL REFERENCES reklet.work_time_calculations(id) ON DELETE CASCADE,
+                object_item_id int4 NOT NULL REFERENCES reklet.object_items(id) ON DELETE RESTRICT,
+                item_name text NOT NULL,
+                quantity int4 NOT NULL,
+                unit_cost numeric NOT NULL DEFAULT 0,
+                base_production_minutes numeric NOT NULL DEFAULT 0,
+                quantity_class text NOT NULL,
+                time_multiplier numeric NOT NULL DEFAULT 1,
+                production_minutes numeric NOT NULL DEFAULT 0,
+                installation_minutes numeric NOT NULL DEFAULT 0,
+                CONSTRAINT work_time_item_quantity_check CHECK (quantity > 0),
+                CONSTRAINT work_time_item_minutes_check CHECK (unit_cost >= 0 AND base_production_minutes >= 0 AND time_multiplier > 0 AND production_minutes >= 0 AND installation_minutes >= 0)
+            )
+            """,
+            (),
+        ),
+        ("CREATE INDEX IF NOT EXISTS idx_material_production_requests_object ON reklet.material_production_requests(object_id)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_material_production_requests_item ON reklet.material_production_requests(object_item_id)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_material_production_requests_material ON reklet.material_production_requests(material_id)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_material_waste_material ON reklet.material_waste_transactions(material_id)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_material_waste_object ON reklet.material_waste_transactions(object_id)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_work_time_calculations_object ON reklet.work_time_calculations(object_id)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_work_time_calculation_items_calc ON reklet.work_time_calculation_items(calculation_id)", ()),
+        ("CREATE INDEX IF NOT EXISTS idx_work_time_calculation_items_item ON reklet.work_time_calculation_items(object_item_id)", ()),
+    ]
+
+    run_transaction(statements)
+    st.session_state["_task_three_tables_ready"] = True
 
 
 def ensure_object_item_material_costs(object_id):
