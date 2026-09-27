@@ -8,7 +8,11 @@ from core.formatting import safe_int, safe_float, money
 from core.printing import printable_html, render_print_html
 from core.ui import data_editor_ru, render_button_nav
 from repositories.clients import get_clients
-from repositories.objects import get_objects, get_stage_objects
+from repositories.objects import (
+    get_objects,
+    get_stage_objects,
+    get_object_items,
+)
 from repositories.materials import (
     get_materials,
     get_materials_with_categories,
@@ -799,40 +803,6 @@ except Exception as e:
 
 
 
-
-def get_object_items(object_id):
-
-    return run_query(
-        """
-        SELECT
-            oi.id,
-            oi.object_id,
-            oi.product_template_id,
-            oi.template_id,
-            oi.item_name,
-            oi.quantity,
-            oi.quantity_needed,
-            oi.qty_new,
-            oi.qty_production,
-            oi.qty_ready,
-            oi.qty_shipped,
-            oi.qty_arrived,
-            oi.qty_installing,
-            oi.qty_installed,
-            oi.production_status,
-            oi.production_progress_pct,
-            oi.installation_status,
-            oi.installation_progress_pct
-
-        FROM reklet.object_items oi
-
-        WHERE oi.object_id = %s
-
-        ORDER BY oi.id
-        """,
-        (object_id,),
-        fetch=True
-    )
 
 
 def get_object_material_planning(object_id):
