@@ -721,9 +721,105 @@ def render_objects():
                     }
                     selected_object_label = st.selectbox(
                         "Объект",
-                        object_options,
+                        ["Все объекты"] + object_options,
+                        index=0,
                         key="management_object_filter"
                     )
+
+                    # По умолчанию управление показывает сводные данные по всем
+                    # доступным объектам. После выбора конкретного объекта
+                    # открывается существующий режим редактирования.
+                    if selected_object_label == "Все объекты":
+                        all_rows = []
+                        templates_all = get_templates()
+
+                        for _, current_object_row in filtered_objects.iterrows():
+                            current_object_id = safe_int(current_object_row["id"])
+                            current_client_name = str(
+                                current_object_row.get("client_name", "") or ""
+                            ).strip()
+
+                            object_templates = templates_all
+                            if current_client_name:
+                                object_templates = object_templates[
+                                    object_templates["client_name"]
+                                    .fillna("")
+                                    .astype(str)
+                                    .str.strip()
+                                    .eq(current_client_name)
+                                ].copy()
+                            else:
+                                object_templates = object_templates.iloc[0:0].copy()
+
+                            current_items_all = get_object_items(current_object_id)
+                            current_map_all = {}
+                            if not current_items_all.empty:
+                                for _, item_row in current_items_all.iterrows():
+                                    tid = (
+                                        item_row["product_template_id"]
+                                        if pd.notna(item_row["product_template_id"])
+                                        else item_row["template_id"]
+                                    )
+                                    if pd.notna(tid):
+                                        current_map_all[int(tid)] = item_row
+
+                            template_rows_all = {
+                                int(t["id"]): t for _, t in object_templates.iterrows()
+                            }
+                            product_ids_all = sorted(set(template_rows_all) | set(current_map_all))
+
+                            for tid in product_ids_all:
+                                t = template_rows_all.get(tid)
+                                old = current_map_all.get(tid)
+                                name = str(
+                                    (t["name"] if t is not None else old.get("item_name", ""))
+                                    or ""
+                                ).strip()
+
+                                ordered = safe_int(old["quantity_needed"]) if old is not None else 0
+                                qty_production = safe_int(old["qty_production"]) if old is not None else 0
+                                qty_ready = safe_int(old["qty_ready"]) if old is not None else 0
+                                qty_shipped = safe_int(old["qty_shipped"]) if old is not None else 0
+                                qty_arrived = safe_int(old["qty_arrived"]) if old is not None else 0
+                                qty_installing = safe_int(old["qty_installing"]) if old is not None else 0
+                                qty_installed = safe_int(old["qty_installed"]) if old is not None else 0
+                                physical_allocated = (
+                                    qty_production + qty_ready + qty_shipped +
+                                    qty_arrived + qty_installing + qty_installed
+                                )
+                                qty_new = max(ordered - physical_allocated, 0)
+
+                                all_rows.append({
+                                    "Заказчик": current_client_name,
+                                    "Объект": str(current_object_row.get("object_name", "") or "").strip(),
+                                    "ID": tid,
+                                    "Изделие": name,
+                                    "Заказ-Всего": ordered,
+                                    "Производство-Осталось": qty_new,
+                                    "Производство-В работе": qty_production,
+                                    "Склад-Готово": qty_ready,
+                                    "Транспорт-В пути": qty_shipped,
+                                    "Объект-Получено": qty_arrived,
+                                    "Монтаж-В работе": qty_installing,
+                                    "Объект-Установлено": qty_installed,
+                                })
+
+                        if not all_rows:
+                            st.info("Изделий по выбранному отбору нет.")
+                        else:
+                            all_management_df = pd.DataFrame(all_rows)
+                            st.dataframe(
+                                all_management_df,
+                                width="stretch",
+                                hide_index=True,
+                            )
+                            render_print_html(
+                                "Управление объектами — общий список",
+                                all_management_df,
+                                "print_object_management_all",
+                            )
+                        return
+
                     object_id = object_map[selected_object_label]
                     object_row = filtered_objects[filtered_objects["id"] == object_id].iloc[0]
 
