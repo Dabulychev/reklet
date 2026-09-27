@@ -663,9 +663,21 @@ def render_objects():
                 if current_items.empty:
                     st.info("Для этого объекта ещё не созданы изделия.")
                 else:
-                    view = current_items[["id", "item_name", "quantity", "qty_production", "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"]].copy()
-                    view.columns = ["ID", "Изделие", "Количество", "Производство", "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"]
-                    st.dataframe(view, width="stretch", hide_index=True)
+                    display_items = current_items.copy()
+                    stage_columns = [
+                        "quantity", "qty_production", "qty_ready", "qty_shipped",
+                        "qty_arrived", "qty_installing", "qty_installed"
+                    ]
+                    numeric = display_items[stage_columns].apply(pd.to_numeric, errors="coerce").fillna(0)
+                    active_mask = numeric.ne(0).any(axis=1)
+                    display_items = display_items.loc[active_mask].copy()
+
+                    if display_items.empty:
+                        st.info("В составе объекта нет актуальных изделий.")
+                    else:
+                        view = display_items[["id", "item_name", "quantity", "qty_production", "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"]].copy()
+                        view.columns = ["ID", "Изделие", "Количество", "Производство", "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"]
+                        st.dataframe(view, width="stretch", hide_index=True)
 
         # ------------------------------------------------------------
         # УПРАВЛЕНИЕ ОБЪЕКТАМИ — ЕДНА СТРОКА НА ИЗДЕЛИЕ
