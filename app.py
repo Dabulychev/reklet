@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import psycopg2
+
 from html import escape
 
 from core.db import get_connection, run_query, run_transaction
