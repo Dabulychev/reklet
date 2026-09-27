@@ -216,6 +216,7 @@ def calculate_object_management_change(
             ),
         }
 
+    
     state["new"] = state["order"] - allocated
 
     return {
