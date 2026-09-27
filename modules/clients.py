@@ -75,213 +75,135 @@ def render_clients():
 
     # ========================================================
     # КОРРЕКТИРОВКА КЛИЕНТА
-    # Показывается только когда сверху выбран конкретный клиент.
+    # Строка всегда видна. Без конкретного клиента она неактивна;
+    # после выбора клиента раскрывается рабочее окно.
     # ========================================================
-    if selected_client_id is not None and not clients.empty:
+    if selected_client_id is None or clients.empty:
+        st.button(
+            "Корректировка клиента",
+            key="client_correction_placeholder",
+            disabled=True,
+            use_container_width=True,
+        )
+    else:
         row = clients[clients["id"] == selected_client_id].iloc[0]
-        st.markdown("---")
-        st.subheader("Корректировка клиента")
+        with st.expander("Корректировка клиента", expanded=False):
+            pending_key = f"client_edit_pending_{selected_client_id}"
 
-        pending_key = f"client_edit_pending_{selected_client_id}"
+            with st.form(
+                f"edit_client_form_{selected_client_id}",
+                clear_on_submit=False,
+            ):
+                name = st.text_input("Наименование", value=str(row["name"] or ""))
+                phone = st.text_input("Телефон", value=str(row["phone"] or ""))
+                address = st.text_input("Адрес", value=str(row["address"] or ""))
+                email = st.text_input("Email", value=str(row["email"] or ""))
+                website = st.text_input("Веб-сайт", value=str(row["website"] or ""))
+                notes = st.text_area("Примечание", value=str(row["notes"] or ""))
+                execute_client_changes = st.form_submit_button(
+                    "Выполнить", use_container_width=True
+                )
 
-        with st.form(
-            f"edit_client_form_{selected_client_id}",
-            clear_on_submit=False,
-        ):
-            name = st.text_input(
-                "Наименование",
-                value=str(row["name"] or ""),
-            )
-            phone = st.text_input(
-                "Телефон",
-                value=str(row["phone"] or ""),
-            )
-            address = st.text_input(
-                "Адрес",
-                value=str(row["address"] or ""),
-            )
-            email = st.text_input(
-                "Email",
-                value=str(row["email"] or ""),
-            )
-            website = st.text_input(
-                "Веб-сайт",
-                value=str(row["website"] or ""),
-            )
-            notes = st.text_area(
-                "Примечание",
-                value=str(row["notes"] or ""),
-            )
-            execute_client_changes = st.form_submit_button(
-                "Выполнить",
-                use_container_width=True,
-            )
+            if execute_client_changes:
+                new_values = {
+                    "name": name.strip(),
+                    "phone": phone.strip() or None,
+                    "address": address.strip() or None,
+                    "email": email.strip() or None,
+                    "website": website.strip() or None,
+                    "notes": notes.strip() or None,
+                }
 
-        if execute_client_changes:
-            new_values = {
-                "name": name.strip(),
-                "phone": phone.strip() or None,
-                "address": address.strip() or None,
-                "email": email.strip() or None,
-                "website": website.strip() or None,
-                "notes": notes.strip() or None,
-            }
-
-            if not new_values["name"]:
-                st.error("Наименование клиента не может быть пустым.")
-            else:
-                comparisons = [
-                    (
-                        "Наименование",
-                        str(row["name"] or "").strip(),
-                        new_values["name"],
-                    ),
-                    (
-                        "Телефон",
-                        str(row["phone"] or "").strip(),
-                        new_values["phone"] or "",
-                    ),
-                    (
-                        "Адрес",
-                        str(row["address"] or "").strip(),
-                        new_values["address"] or "",
-                    ),
-                    (
-                        "Email",
-                        str(row["email"] or "").strip(),
-                        new_values["email"] or "",
-                    ),
-                    (
-                        "Веб-сайт",
-                        str(row["website"] or "").strip(),
-                        new_values["website"] or "",
-                    ),
-                    (
-                        "Примечание",
-                        str(row["notes"] or "").strip(),
-                        new_values["notes"] or "",
-                    ),
-                ]
-
-                changes = []
-                for label, old_val, new_val in comparisons:
-                    if str(old_val or "") != str(new_val or ""):
-                        changes.append(
-                            {
+                if not new_values["name"]:
+                    st.error("Наименование клиента не может быть пустым.")
+                else:
+                    comparisons = [
+                        ("Наименование", str(row["name"] or "").strip(), new_values["name"]),
+                        ("Телефон", str(row["phone"] or "").strip(), new_values["phone"] or ""),
+                        ("Адрес", str(row["address"] or "").strip(), new_values["address"] or ""),
+                        ("Email", str(row["email"] or "").strip(), new_values["email"] or ""),
+                        ("Веб-сайт", str(row["website"] or "").strip(), new_values["website"] or ""),
+                        ("Примечание", str(row["notes"] or "").strip(), new_values["notes"] or ""),
+                    ]
+                    changes=[]
+                    for label, old_val, new_val in comparisons:
+                        if str(old_val or "") != str(new_val or ""):
+                            changes.append({
                                 "Поле": label,
                                 "Было": old_val if old_val else "—",
                                 "Станет": new_val if new_val else "—",
-                            }
-                        )
+                            })
+                    if changes:
+                        st.session_state[pending_key] = {
+                            "client_id": selected_client_id,
+                            "values": new_values,
+                            "changes": changes,
+                        }
+                    else:
+                        st.info("Изменений нет.")
 
-                if changes:
-                    st.session_state[pending_key] = {
-                        "client_id": selected_client_id,
-                        "values": new_values,
-                        "changes": changes,
-                    }
-                else:
-                    st.info("Изменений нет.")
-
-        pending = st.session_state.get(pending_key)
-        if pending:
-            st.markdown("---")
-            st.subheader("Подтверждение изменений")
-            st.dataframe(
-                pd.DataFrame(pending["changes"]),
-                width="stretch",
-                hide_index=True,
-            )
-
-            c1, c2 = st.columns(2)
-            with c1:
-                confirm_client_changes = st.button(
-                    "Подтвердить",
-                    key=f"confirm_client_edit_{selected_client_id}",
-                    type="primary",
-                    use_container_width=True,
-                )
-            with c2:
-                cancel_client_changes = st.button(
-                    "Отмена",
-                    key=f"cancel_client_edit_{selected_client_id}",
-                    use_container_width=True,
-                )
-
-            if confirm_client_changes:
-                values = pending["values"]
-                try:
-                    run_transaction(
-                        [
+            pending = st.session_state.get(pending_key)
+            if pending:
+                st.markdown("---")
+                st.subheader("Подтверждение изменений")
+                st.dataframe(pd.DataFrame(pending["changes"]), width="stretch", hide_index=True)
+                c1,c2=st.columns(2)
+                with c1:
+                    confirm_client_changes=st.button(
+                        "Подтвердить", key=f"confirm_client_edit_{selected_client_id}",
+                        type="primary", use_container_width=True
+                    )
+                with c2:
+                    cancel_client_changes=st.button(
+                        "Отмена", key=f"cancel_client_edit_{selected_client_id}",
+                        use_container_width=True
+                    )
+                if confirm_client_changes:
+                    values=pending["values"]
+                    try:
+                        run_transaction([
                             (
-                                """
-                                UPDATE reklet.clients
-                                SET name=%s,
-                                    phone=%s,
-                                    address=%s,
-                                    email=%s,
-                                    website=%s,
-                                    notes=%s,
-                                    contact_info=%s
-                                WHERE id=%s
-                                """,
-                                (
-                                    values["name"],
-                                    values["phone"],
-                                    values["address"],
-                                    values["email"],
-                                    values["website"],
-                                    values["notes"],
-                                    values["phone"],
-                                    selected_client_id,
-                                ),
+                                """UPDATE reklet.clients
+                                   SET name=%s, phone=%s, address=%s, email=%s,
+                                       website=%s, notes=%s, contact_info=%s
+                                 WHERE id=%s""",
+                                (values["name"],values["phone"],values["address"],values["email"],
+                                 values["website"],values["notes"],values["phone"],selected_client_id)
                             )
-                        ]
-                    )
-                    st.session_state.pop(pending_key, None)
-                    st.success("Данные клиента изменены.")
+                        ])
+                        st.session_state.pop(pending_key,None)
+                        st.success("Данные клиента изменены.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error("Изменения не сохранены. Транзакция отменена.")
+                        st.code(str(e))
+                if cancel_client_changes:
+                    st.session_state.pop(pending_key,None)
                     st.rerun()
-                except Exception as e:
-                    st.error("Изменения не сохранены. Транзакция отменена.")
-                    st.code(str(e))
 
-            if cancel_client_changes:
-                st.session_state.pop(pending_key, None)
-                st.rerun()
-
-        # Безопасное удаление остаётся закрытым и относится
-        # только к выбранному сверху клиенту.
-        with st.expander("Безопасное удаление клиента"):
-            st.warning(
-                "Удаление необратимо. Клиента нельзя удалить, "
-                "если он используется хотя бы одним объектом."
-            )
-            delete_confirm = st.checkbox(
-                "Я подтверждаю удаление выбранного клиента.",
-                key=f"confirm_delete_client_{selected_client_id}",
-            )
-            if st.button(
-                "Удалить клиента",
-                key=f"delete_client_{selected_client_id}",
-                disabled=not delete_confirm,
-                use_container_width=True,
-            ):
-                used = run_query(
-                    "SELECT COUNT(*) AS cnt FROM reklet.objects WHERE client_id=%s",
-                    (selected_client_id,),
-                    fetch=True,
+            with st.expander("Безопасное удаление клиента"):
+                st.warning(
+                    "Удаление необратимо. Клиента нельзя удалить, "
+                    "если он используется хотя бы одним объектом."
                 )
-                if int(used.iloc[0]["cnt"]) > 0:
-                    st.error(
-                        "Удаление невозможно: этот клиент используется объектами."
+                delete_confirm=st.checkbox(
+                    "Я подтверждаю удаление выбранного клиента.",
+                    key=f"confirm_delete_client_{selected_client_id}",
+                )
+                if st.button(
+                    "Удалить клиента", key=f"delete_client_{selected_client_id}",
+                    disabled=not delete_confirm, use_container_width=True
+                ):
+                    used=run_query(
+                        "SELECT COUNT(*) AS cnt FROM reklet.objects WHERE client_id=%s",
+                        (selected_client_id,),fetch=True
                     )
-                else:
-                    run_query(
-                        "DELETE FROM reklet.clients WHERE id=%s",
-                        (selected_client_id,),
-                    )
-                    st.success("Клиент удалён.")
-                    st.rerun()
+                    if int(used.iloc[0]["cnt"])>0:
+                        st.error("Удаление невозможно: этот клиент используется объектами.")
+                    else:
+                        run_query("DELETE FROM reklet.clients WHERE id=%s",(selected_client_id,))
+                        st.success("Клиент удалён.")
+                        st.rerun()
 
     # ========================================================
     # ДОБАВИТЬ КЛИЕНТА
