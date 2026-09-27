@@ -12,22 +12,13 @@ def select_object_by_customer(prefix):
     if clients.empty:
         st.info("Заказчики отсутствуют.")
         return None, None
-
     if objects.empty:
         st.info("Объектов нет.")
         return None, None
 
     client_rows = clients[["id", "name"]].copy()
-    client_rows["name"] = (
-        client_rows["name"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-    )
-    client_rows = client_rows[
-        client_rows["name"] != ""
-    ].drop_duplicates(subset=["id"])
-
+    client_rows["name"] = client_rows["name"].fillna("").astype(str).str.strip()
+    client_rows = client_rows[client_rows["name"] != ""].drop_duplicates(subset=["id"])
     client_options = [
         f"{int(r['id'])} — {r['name']}"
         for _, r in client_rows.iterrows()
@@ -37,7 +28,7 @@ def select_object_by_customer(prefix):
         "Заказчик",
         ["— Выберите заказчика —"] + client_options,
         index=0,
-        key=f"{prefix}_customer_select",
+        key=f"{prefix}_customer_select"
     )
 
     if selected_client == "— Выберите заказчика —":
@@ -45,12 +36,8 @@ def select_object_by_customer(prefix):
         return None, None
 
     client_id = int(selected_client.split(" — ")[0])
-
     client_objects = objects[
-        pd.to_numeric(
-            objects["client_id"],
-            errors="coerce",
-        ).eq(client_id)
+        pd.to_numeric(objects["client_id"], errors="coerce").eq(client_id)
     ].copy()
 
     if client_objects.empty:
@@ -66,7 +53,7 @@ def select_object_by_customer(prefix):
         "Объект",
         ["— Выберите объект —"] + object_options,
         index=0,
-        key=f"{prefix}_object_select_{client_id}",
+        key=f"{prefix}_object_select_{client_id}"
     )
 
     if selected_object == "— Выберите объект —":
@@ -74,8 +61,5 @@ def select_object_by_customer(prefix):
         return None, None
 
     object_id = int(selected_object.split(" — ")[0])
-    object_row = client_objects[
-        client_objects["id"] == object_id
-    ].iloc[0]
-
+    object_row = client_objects[client_objects["id"] == object_id].iloc[0]
     return object_id, object_row
