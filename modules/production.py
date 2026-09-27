@@ -9,7 +9,7 @@ from database.migrations import (
     ensure_stage_movement_tables,
     ensure_object_item_material_costs,
 )
-from repositories.objects import get_stage_objects
+from repositories.objects import get_objects
 
 
 def render_production():
@@ -18,9 +18,9 @@ def render_production():
     st.header("Производство")
     ensure_stage_movement_tables()
 
-    objects = get_stage_objects("production")
+    objects = get_objects().sort_values("id", ascending=False).copy()
     if objects.empty:
-        st.success("На производстве нет незавершённых заданий.")
+        st.info("Объектов нет.")
     else:
         object_options = [f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}" for _, r in objects.iterrows()]
         object_map = {x: int(x.split(" — ")[0]) for x in object_options}
