@@ -15,7 +15,7 @@ from repositories.materials import (
     get_material_categories,
 )
 from repositories.suppliers import get_suppliers
-
+from repositories.products import get_templates
 
 
 
@@ -791,25 +791,6 @@ except Exception as e:
 # ============================================================
 # DATA FUNCTIONS
 # ============================================================
-
-
-def get_templates():
-
-    return run_query(
-        """
-        SELECT
-            id,
-            name,
-            type,
-            client_name,
-            category
-
-        FROM reklet.product_templates
-
-        ORDER BY name
-        """,
-        fetch=True
-    )
 
 
 def ensure_product_category_table():
