@@ -4,16 +4,16 @@ from core.db import run_query, run_transaction
 from core.formatting import safe_int
 from core.printing import render_print_html
 from database.migrations import ensure_stage_movement_tables
-from repositories.objects import get_stage_objects
+from repositories.objects import get_objects
 
 
 def render_installation():
 
     st.header("Монтаж")
     ensure_stage_movement_tables()
-    objects=get_stage_objects("installation")
+    objects=get_objects().sort_values("id", ascending=False).copy()
     if objects.empty:
-        st.success("На монтаже нет незавершённых заданий.")
+        st.info("Объектов нет.")
     else:
         object_options=[f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}" for _,r in objects.iterrows()]
         object_map={x:int(x.split(" — ")[0]) for x in object_options}
