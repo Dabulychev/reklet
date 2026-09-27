@@ -24,7 +24,13 @@ from repositories.products import (
     get_product_categories,
     get_product_category_names,
 )
-from database.migrations import ensure_product_category_table
+from database.migrations import (
+    ensure_product_category_table,
+    ensure_stage_movement_tables,
+    initialize_database,
+    ensure_material_planning_tables,
+    ensure_object_item_material_costs,
+)
 
 
 
