@@ -5,6 +5,8 @@ from core.db import get_connection, run_query, run_transaction
 from core.formatting import safe_float, safe_int
 from core.printing import render_print_html
 from database.migrations import ensure_material_planning_tables
+from repositories.clients import get_clients
+from repositories.objects import get_objects
 from repositories.materials import (
     get_material_categories,
     get_materials_with_categories,
