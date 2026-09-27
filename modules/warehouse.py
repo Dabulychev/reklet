@@ -38,10 +38,29 @@ def warehouse_select_object(prefix):
     return object_id,row
 
 
+def _select_warehouse_section(value):
+    st.session_state["warehouse_section"] = value
+
+
+def _format_qty(value):
+    """Display warehouse quantities with at most two decimal places."""
+    if value is None or pd.isna(value):
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(number) < 0.005:
+        number = 0.0
+    return f"{number:.2f}".rstrip("0").rstrip(".") or "0"
+
+
 def render_warehouse():
 
     st.header("Склад материалов")
 
+    # Только шесть актуальных разделов. Смена раздела выполняется через
+    # callback, поэтому нет промежуточного рендера старого набора кнопок.
     material_sections = [
         ("Перечень материалов", "list"),
         ("Потребность материалов", "planning"),
@@ -51,20 +70,24 @@ def render_warehouse():
         ("Движение материалов", "movement"),
     ]
 
-    valid_material_sections={value for _,value in material_sections}
-    if st.session_state.get("material_section") not in valid_material_sections:
-        st.session_state.material_section = "list"
+    valid_material_sections = {value for _, value in material_sections}
+    if st.session_state.get("warehouse_section") not in valid_material_sections:
+        st.session_state["warehouse_section"] = "list"
 
-    for start_idx in range(0,len(material_sections),3):
-        row=material_sections[start_idx:start_idx+3]
-        cols=st.columns(len(row),gap="small")
-        for col,(label,value) in zip(cols,row):
+    for start_idx in range(0, len(material_sections), 3):
+        row = material_sections[start_idx:start_idx + 3]
+        cols = st.columns(len(row), gap="small")
+        for col, (label, value) in zip(cols, row):
             with col:
-                if st.button(label,key=f"material_nav_{start_idx}_{value}",use_container_width=True):
-                    st.session_state.material_section=value
-                    st.rerun()
+                st.button(
+                    label,
+                    key=f"warehouse_nav_{start_idx}_{value}",
+                    use_container_width=True,
+                    on_click=_select_warehouse_section,
+                    args=(value,),
+                )
 
-    active_material_section=st.session_state.material_section
+    active_material_section = st.session_state["warehouse_section"]
     materials=get_materials_with_categories()
     categories=get_material_categories()
 
@@ -695,6 +718,13 @@ def render_warehouse():
                     "Требуется","Выдано в производство","На производстве",
                     "Осталось потребно","На складе","Ожидается","Нужно купить"
                 ]
+                quantity_columns=[
+                    "По спецификации","Обрез","Требуется",
+                    "Выдано в производство","На производстве",
+                    "Осталось потребно","На складе","Ожидается","Нужно купить"
+                ]
+                for column in quantity_columns:
+                    view[column]=view[column].map(_format_qty)
                 st.dataframe(view,width="stretch",hide_index=True)
                 render_print_html(
                     f"Необходимые материалы — {object_row['object_name']}",
