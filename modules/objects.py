@@ -663,8 +663,8 @@ def render_objects():
                 if current_items.empty:
                     st.info("Для этого объекта ещё не созданы изделия.")
                 else:
-                    view = current_items[["id", "item_name", "quantity", "qty_new", "qty_production", "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"]].copy()
-                    view.columns = ["ID", "Изделие", "Количество", "Новые", "Производство", "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"]
+                    view = current_items[["id", "item_name", "quantity", "qty_production", "qty_ready", "qty_shipped", "qty_arrived", "qty_installing", "qty_installed"]].copy()
+                    view.columns = ["ID", "Изделие", "Количество", "Производство", "Готовая продукция", "Отгружено", "Прибыло", "Монтаж", "Смонтировано"]
                     st.dataframe(view, width="stretch", hide_index=True)
 
         # ------------------------------------------------------------
