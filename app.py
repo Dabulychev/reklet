@@ -44,51 +44,6 @@ st.set_page_config(
 )
 
 
-    """Execute a batch of SQL statements atomically."""
-    conn = None
-    cursor = None
-    try:
-        conn = get_connection()
-
-        if getattr(conn, "closed", 0):
-            try:
-                get_connection.clear()
-            except Exception:
-                pass
-            conn = get_connection()
-
-        try:
-            cursor = conn.cursor()
-        except (psycopg2.InterfaceError, psycopg2.OperationalError):
-            try:
-                conn.close()
-            except Exception:
-                pass
-            try:
-                get_connection.clear()
-            except Exception:
-                pass
-            conn = get_connection()
-            cursor = conn.cursor()
-
-        for query, params in statements:
-            cursor.execute(query, params)
-        conn.commit()
-    except Exception:
-        if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-        raise
-    finally:
-        if cursor is not None:
-            try:
-                cursor.close()
-            except Exception:
-                pass
-
-
 
 # ============================================================
 # DATABASE STARTUP
