@@ -9,7 +9,7 @@ from database.migrations import (
     ensure_stage_movement_tables,
     ensure_object_item_material_costs,
 )
-from repositories.objects import get_objects
+from repositories.objects import get_stage_objects
 
 
 def render_production():
@@ -18,7 +18,7 @@ def render_production():
     st.header("Производство")
     ensure_stage_movement_tables()
 
-    objects = get_objects().sort_values("id", ascending=False).copy()
+    objects = get_stage_objects("production").copy()
     if objects.empty:
         st.info("Объектов нет.")
     else:
