@@ -4,7 +4,7 @@ from core.db import run_query, run_transaction
 from core.formatting import safe_int
 from core.printing import render_print_html
 from database.migrations import ensure_stage_movement_tables
-from repositories.objects import get_stage_objects
+from modules.stage_filter_helper import get_stage_work_items, render_stage_object_filters
 
 
 def render_finished_goods():
@@ -12,14 +12,32 @@ def render_finished_goods():
     st.header("Готовая продукция")
     ensure_stage_movement_tables()
 
-    objects = get_stage_objects("finished_goods")
-    if objects.empty:
+    stage_objects, filtered_objects, selected_client, selected_object, object_id = render_stage_object_filters(
+        "finished_goods", "finished_goods"
+    )
+    if stage_objects.empty:
         st.success("На складе готовой продукции нет незавершённых заданий.")
+    elif selected_object == "Все объекты":
+        overview = get_stage_work_items("finished_goods", filtered_objects["id"].tolist())
+        if overview.empty:
+            st.info("Для выбранного отбора нет изделий на складе готовой продукции.")
+        else:
+            view = overview[[
+                "client_name", "object_name", "item_name", "quantity_needed",
+                "qty_ready", "qty_shipped", "qty_arrived"
+            ]].copy()
+            view.columns = [
+                "Заказчик", "Объект", "Изделие", "Заказано",
+                "На складе", "Уже отправлено", "Доставлено"
+            ]
+            st.dataframe(view, width="stretch", hide_index=True)
+            render_print_html(
+                "Склад готовой продукции — актуальные задания",
+                view,
+                "print_finished_goods_all"
+            )
+            st.caption("Для передачи изделий в транспорт выберите конкретный объект в отборе выше.")
     else:
-        object_options = [f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}" for _, r in objects.iterrows()]
-        object_map = {x: int(x.split(" — ")[0]) for x in object_options}
-        selected_object = st.selectbox("Объект", object_options, key="finished_goods_object_filter")
-        object_id = object_map[selected_object]
 
         df = run_query(
             """SELECT oi.id, oi.item_name, oi.quantity_needed AS ordered,
