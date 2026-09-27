@@ -14,6 +14,9 @@ from repositories.materials import (
     get_materials_with_categories,
     get_material_categories,
 )
+from repositories.suppliers import get_suppliers
+
+
 
 
 # ============================================================
@@ -788,20 +791,6 @@ except Exception as e:
 # ============================================================
 # DATA FUNCTIONS
 # ============================================================
-
-
-
-
-def get_suppliers():
-
-    return run_query(
-        """
-        SELECT *
-        FROM reklet.suppliers
-        ORDER BY name
-        """,
-        fetch=True
-    )
 
 
 def get_templates():
