@@ -15,7 +15,11 @@ from repositories.materials import (
     get_material_categories,
 )
 from repositories.suppliers import get_suppliers
-from repositories.products import get_templates
+from repositories.products import (
+    get_templates,
+    get_product_categories,
+    get_product_category_names,
+)
 from database.migrations import ensure_product_category_table
 
 
@@ -795,18 +799,6 @@ except Exception as e:
 
 
 
-
-def get_product_categories():
-    ensure_product_category_table()
-    return run_query(
-        "SELECT id, name FROM reklet.product_categories ORDER BY name",
-        fetch=True
-    )
-
-
-def get_product_category_names():
-    cats = get_product_categories()
-    return cats["name"].astype(str).tolist() if not cats.empty else []
 
 def get_object_items(object_id):
 
