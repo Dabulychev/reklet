@@ -135,23 +135,31 @@ def render_warehouse():
                     suppliers_for_add = get_suppliers()
                     supplier_map={f"{int(r['id'])} — {r['name']}":int(r['id']) for _,r in suppliers_for_add.iterrows()} if not suppliers_for_add.empty else {}
 
-                    with st.form("add_material_form_list_expander_v2"):
-                        name=st.text_input("Название материала", key="add_material_name_expander_v2")
-                        unit=st.selectbox("Единица измерения",list(unit_map.keys()), key="add_material_unit_expander_v2") if unit_map else None
-                        cat=st.selectbox("Категория",cat_options_add, key="add_material_category_expander_v2")
-                        price=st.number_input("Цена за единицу",min_value=0.0,value=0.0,format="%.2f", key="add_material_price_expander_v2")
-                        stock=st.number_input("Начальный остаток",min_value=0.0,value=0.0,format="%.4f", key="add_material_stock_expander_v2")
-                        waste=st.number_input("Коэффициент отходов",min_value=0.0,value=1.20,format="%.2f", key="add_material_waste_expander_v2")
+                    add_form_version = st.session_state.get("add_material_form_version", 0)
+                    add_form_suffix = f"_v{add_form_version}"
+                    add_form_key = f"add_material_form_list_expander{add_form_suffix}"
+
+                    with st.form(add_form_key):
+                        name=st.text_input("Название материала", key=f"add_material_name_expander{add_form_suffix}")
+                        unit=st.selectbox("Единица измерения",list(unit_map.keys()), key=f"add_material_unit_expander{add_form_suffix}") if unit_map else None
+                        cat=st.selectbox("Категория",cat_options_add, key=f"add_material_category_expander{add_form_suffix}")
+                        price=st.number_input("Цена за единицу",min_value=0.0,value=0.0,format="%.2f", key=f"add_material_price_expander{add_form_suffix}")
+                        stock=st.number_input("Начальный остаток",min_value=0.0,value=0.0,format="%.4f", key=f"add_material_stock_expander{add_form_suffix}")
+                        waste=st.number_input("Коэффициент отходов",min_value=0.0,value=1.20,format="%.2f", key=f"add_material_waste_expander{add_form_suffix}")
                         chosen_suppliers=st.multiselect(
                             "Поставщики (можно выбрать одного или нескольких)",
                             list(supplier_map.keys()),
-                            key="add_material_suppliers_expander_v2"
+                            key=f"add_material_suppliers_expander{add_form_suffix}"
                         )
-                        preferred_options = ["— Не выбран —"] + chosen_suppliers
+                        # Предпочтительный поставщик выбирается только один раз
+                        # и из полного списка поставщиков, а не только из выбранных
+                        # выше. Если выбран только здесь, он автоматически
+                        # добавляется также в список поставщиков материала.
+                        preferred_options = ["— Не выбран —"] + list(supplier_map.keys())
                         preferred_supplier = st.selectbox(
                             "Привилегированный / предпочтительный поставщик",
                             preferred_options,
-                            key="add_material_preferred_supplier_expander_v2"
+                            key=f"add_material_preferred_supplier_expander{add_form_suffix}"
                         )
                         submit=st.form_submit_button("Добавить материал",use_container_width=True)
                         if submit:
@@ -166,8 +174,14 @@ def render_warehouse():
                                     "price":price,
                                     "stock":stock,
                                     "waste":waste,
-                                    "supplier_ids":[supplier_map[x] for x in chosen_suppliers],
-                                    "supplier_labels":chosen_suppliers,
+                                    "supplier_ids": list(dict.fromkeys(
+                                        [supplier_map[x] for x in chosen_suppliers] +
+                                        ([supplier_map[preferred_supplier]] if preferred_supplier != "— Не выбран —" else [])
+                                    )),
+                                    "supplier_labels": list(dict.fromkeys(
+                                        chosen_suppliers +
+                                        ([preferred_supplier] if preferred_supplier != "— Не выбран —" else [])
+                                    )),
                                     "preferred_supplier_id": (
                                         supplier_map[preferred_supplier]
                                         if preferred_supplier != "— Не выбран —"
@@ -236,6 +250,9 @@ def render_warehouse():
                                 cur.close()
                                 conn.close()
                             st.session_state.pop("pending_material_create_list_expander_v2",None)
+                            # Увеличиваем версию формы: после успешного добавления
+                            # Streamlit создаёт новый экземпляр формы с пустыми полями.
+                            st.session_state["add_material_form_version"] = add_form_version + 1
                             st.success(f"Материал «{pending_create['name']}» добавлен в перечень в категорию «{cat_text}».")
                             st.rerun()
 
