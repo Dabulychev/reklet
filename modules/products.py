@@ -4,7 +4,6 @@ import streamlit as st
 from core.db import run_query, run_transaction
 from core.formatting import safe_int, safe_float
 from core.printing import render_print_html
-from core.ui import render_button_nav
 from repositories.clients import get_clients
 from repositories.materials import (
     get_materials_with_categories,
@@ -371,12 +370,32 @@ def _render_product_specification(templates):
                     st.rerun()
 
 
+def _select_product_section(value):
+    st.session_state["products_navigation"] = value
+
+
+def _render_product_navigation():
+    options = ["Перечень изделий", "Спецификация изделия"]
+    if st.session_state.get("products_navigation") not in options:
+        st.session_state["products_navigation"] = options[0]
+
+    cols = st.columns(2, gap="small")
+    for col, option in zip(cols, options):
+        with col:
+            st.button(
+                option,
+                key=f"products_nav_direct_{option}",
+                use_container_width=True,
+                on_click=_select_product_section,
+                args=(option,),
+            )
+
+    return st.session_state["products_navigation"]
+
+
 def render_products():
     st.header("Изделия")
-    product_sub=render_button_nav(
-        ["Перечень изделий","Спецификация изделия"],
-        "products_navigation","products_nav",columns_per_row=2
-    )
+    product_sub = _render_product_navigation()
 
     templates_all=get_templates()
     client_options=["Все заказчики"]+(
