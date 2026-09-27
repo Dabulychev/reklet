@@ -9,7 +9,7 @@ from database.migrations import (
     ensure_stage_movement_tables,
     ensure_object_item_material_costs,
 )
-from repositories.objects import get_stage_objects
+from modules.stage_filter_helper import get_stage_work_items, render_stage_object_filters
 
 
 def render_production():
@@ -18,15 +18,30 @@ def render_production():
     st.header("Производство")
     ensure_stage_movement_tables()
 
-    objects = get_stage_objects("production").copy()
-    if objects.empty:
-        st.info("Объектов нет.")
+    stage_objects, filtered_objects, selected_client, selected_object, object_id = render_stage_object_filters(
+        "production", "production"
+    )
+    if stage_objects.empty:
+        st.success("На производстве нет незавершённых заданий.")
+    elif selected_object == "Все объекты":
+        overview = get_stage_work_items("production", filtered_objects["id"].tolist())
+        if overview.empty:
+            st.info("Для выбранного отбора нет актуальных изделий для производства.")
+        else:
+            view = overview[[
+                "client_name", "object_name", "item_name", "quantity_needed", "qty_new", "qty_production", "qty_ready"
+            ]].copy()
+            view.columns = [
+                "Заказчик", "Объект", "Изделие", "Заказано", "Осталось произвести", "В производстве", "Готовая продукция"
+            ]
+            st.dataframe(view, width="stretch", hide_index=True)
+            render_print_html(
+                "Производство — актуальные задания",
+                view,
+                "print_production_all"
+            )
+            st.caption("Для выполнения операции выберите конкретный объект в отборе выше.")
     else:
-        object_options = [f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}" for _, r in objects.iterrows()]
-        object_map = {x: int(x.split(" — ")[0]) for x in object_options}
-        selected_object = st.selectbox("Объект", object_options, key="production_object_table")
-        object_id = object_map[selected_object]
-
         production_df = run_query(
             """SELECT oi.id, oi.item_name, oi.quantity_needed,
                       COALESCE(oi.qty_new,0) AS qty_new,
