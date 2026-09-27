@@ -9,7 +9,7 @@ from database.migrations import (
     ensure_stage_movement_tables,
     ensure_object_item_material_costs,
 )
-from modules.stage_filter_helper import get_stage_work_items, render_stage_object_filters
+from repositories.objects import get_objects
 
 
 def render_production():
@@ -18,30 +18,15 @@ def render_production():
     st.header("Производство")
     ensure_stage_movement_tables()
 
-    stage_objects, filtered_objects, selected_client, selected_object, object_id = render_stage_object_filters(
-        "production", "production"
-    )
-    if stage_objects.empty:
-        st.success("На производстве нет незавершённых заданий.")
-    elif selected_object == "Все объекты":
-        overview = get_stage_work_items("production", filtered_objects["id"].tolist())
-        if overview.empty:
-            st.info("Для выбранного отбора нет актуальных изделий для производства.")
-        else:
-            view = overview[[
-                "client_name", "object_name", "item_name", "quantity_needed", "qty_new", "qty_production", "qty_ready"
-            ]].copy()
-            view.columns = [
-                "Заказчик", "Объект", "Изделие", "Заказано", "Осталось произвести", "В производстве", "Готовая продукция"
-            ]
-            st.dataframe(view, width="stretch", hide_index=True)
-            render_print_html(
-                "Производство — актуальные задания",
-                view,
-                "print_production_all"
-            )
-            st.caption("Для выполнения операции выберите конкретный объект в отборе выше.")
+    objects = get_objects().sort_values("id", ascending=False).copy()
+    if objects.empty:
+        st.info("Объектов нет.")
     else:
+        object_options = [f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}" for _, r in objects.iterrows()]
+        object_map = {x: int(x.split(" — ")[0]) for x in object_options}
+        selected_object = st.selectbox("Объект", object_options, key="production_object_table")
+        object_id = object_map[selected_object]
+
         production_df = run_query(
             """SELECT oi.id, oi.item_name, oi.quantity_needed,
                       COALESCE(oi.qty_new,0) AS qty_new,
@@ -101,7 +86,6 @@ def render_production():
             editor = production_df[["id","item_name","quantity_needed","manufactured_total","qty_production","qty_ready"]].copy()
             editor.columns = ["ID","Изделие","Заказано","Изготовлено","В производстве","Уже на готовой продукции"]
             editor["Передать на склад"] = 0
-            editor["Сразу смонтировать"] = 0
 
             production_print = editor[[
                 "ID", "Изделие", "Заказано", "Изготовлено",
@@ -124,14 +108,13 @@ def render_production():
                         "В производстве": st.column_config.NumberColumn("В производстве", disabled=True),
                         "Уже на готовой продукции": st.column_config.NumberColumn("Уже на готовой продукции", disabled=True),
                         "Передать на склад": st.column_config.NumberColumn("Передать на склад", min_value=0, step=1, format="%d"),
-                        "Сразу смонтировать": st.column_config.NumberColumn("Сразу смонтировать", min_value=0, step=1, format="%d"),
                     },
                     disabled=["ID","Изделие","Заказано","В производстве","Уже на готовой продукции"],
                 )
                 execute = st.form_submit_button("Выполнить", use_container_width=True)
 
             if execute:
-                selected = edited[(pd.to_numeric(edited["Передать на склад"], errors="coerce").fillna(0) > 0) | (pd.to_numeric(edited["Сразу смонтировать"], errors="coerce").fillna(0) > 0) | (pd.to_numeric(edited["Изготовлено"], errors="coerce").fillna(0) != production_df["manufactured_total"].values)] .copy()
+                selected = edited[(pd.to_numeric(edited["Передать на склад"], errors="coerce").fillna(0) > 0) | (pd.to_numeric(edited["Изготовлено"], errors="coerce").fillna(0) != production_df["manufactured_total"].values)] .copy()
                 errors=[]
                 statements=[]
                 consumption_plan=[]
@@ -144,7 +127,6 @@ def render_production():
                     new_manufactured=safe_int(r["Изготовлено"])
                     in_prod=safe_int(src["qty_production"])
                     to_stock=safe_int(r["Передать на склад"])
-                    direct_install=safe_int(r["Сразу смонтировать"])
                     if new_manufactured < old_manufactured:
                         errors.append(f"{r['Изделие']}: количество изготовленного нельзя уменьшить ниже {old_manufactured}.")
                     if new_manufactured > ordered:
@@ -156,12 +138,10 @@ def render_production():
                             consumption_plan.append((item_id,material_id,qty_material))
                             consumption_by_material[material_id]=consumption_by_material.get(material_id,0.0)+qty_material
                     available_for_transfer = in_prod + max(added,0)
-                    if to_stock + direct_install > available_for_transfer:
-                        errors.append(f"{r['Изделие']}: передача {to_stock + direct_install} шт., доступно максимум {available_for_transfer} шт.")
-                    if to_stock < 0 or direct_install < 0:
+                    if to_stock > available_for_transfer:
+                        errors.append(f"{r['Изделие']}: передача {to_stock} шт., доступно максимум {available_for_transfer} шт.")
+                    if to_stock < 0:
                         errors.append(f"{r['Изделие']}: количество не может быть отрицательным.")
-                    if to_stock and direct_install:
-                        pass
                     if errors and len(errors)>50: break
 
                     if new_manufactured != old_manufactured:
@@ -170,7 +150,7 @@ def render_production():
                             (new_manufactured, added, item_id)
                         ))
 
-                    total_transfer = to_stock + direct_install
+                    total_transfer = to_stock
                     if total_transfer:
                         statements.append((
                             "UPDATE reklet.object_items SET qty_production=GREATEST(COALESCE(qty_production,0)-%s,0), qty_ready=COALESCE(qty_ready,0)+%s WHERE id=%s",
@@ -189,19 +169,6 @@ def render_production():
                                 "INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ready',%s FROM reklet.object_items WHERE id=%s",
                                 (to_stock,item_id)
                             ))
-                        if direct_install:
-                            # Прямая передача: история проходит все четыре этапа,
-                            # но промежуточные остатки не задерживаются на складе/транспорте.
-                            statements.extend([
-                                ("INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ready',%s FROM reklet.object_items WHERE id=%s", (direct_install,item_id)),
-                                ("INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ship',%s FROM reklet.object_items WHERE id=%s", (direct_install,item_id)),
-                                ("INSERT INTO reklet.finished_goods_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'arrive',%s FROM reklet.object_items WHERE id=%s", (direct_install,item_id)),
-                                ("UPDATE reklet.object_items SET qty_installed=COALESCE(qty_installed,0)+%s, installation_status='completed', installation_progress_pct=CASE WHEN quantity_needed>0 THEN LEAST(100,ROUND((COALESCE(qty_installed,0)+%s)::numeric/quantity_needed*100)) ELSE 0 END WHERE id=%s", (direct_install,direct_install,item_id)),
-                                ("INSERT INTO reklet.transport_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'ship',%s FROM reklet.object_items WHERE id=%s", (direct_install,item_id)),
-                                ("INSERT INTO reklet.transport_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'arrive',%s FROM reklet.object_items WHERE id=%s", (direct_install,item_id)),
-                                ("INSERT INTO reklet.installation_transactions (object_item_id,object_id,operation_type,quantity) SELECT id,object_id,'complete',%s FROM reklet.object_items WHERE id=%s", (direct_install,item_id)),
-                            ])
-
                 for material_id,required_qty in consumption_by_material.items():
                     available_wip=wip_map.get(material_id,0.0)
                     if required_qty>available_wip+1e-9:
