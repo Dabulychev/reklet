@@ -1136,7 +1136,7 @@ elif menu == "Объекты":
                                     "old": old_state,
                                     "new": state,
                                     "commands": commands,
-                                    "newly_produced_from_new": newly_produced_from_new[0],
+                                    "newly_produced_from_new": newly_produced_from_new,
                                     "actions": {
                                         "correction": correction,
                                         "manufactured": manufactured_action,
