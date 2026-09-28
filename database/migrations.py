@@ -432,8 +432,8 @@ def ensure_task_three_tables():
             """
             CREATE TABLE IF NOT EXISTS reklet.material_production_requests (
                 id serial4 PRIMARY KEY,
-                object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
-                object_item_id int4 NOT NULL REFERENCES reklet.object_items(id) ON DELETE RESTRICT,
+                object_id int4 NULL REFERENCES reklet.objects(id) ON DELETE SET NULL,
+                object_item_id int4 NULL REFERENCES reklet.object_items(id) ON DELETE SET NULL,
                 material_id int4 NOT NULL REFERENCES reklet.materials(id) ON DELETE RESTRICT,
                 quantity_requested numeric NOT NULL,
                 quantity_supplied numeric NOT NULL DEFAULT 0,
@@ -563,6 +563,116 @@ def ensure_task_three_tables():
 
     run_transaction(statements)
     st.session_state["_task_three_tables_ready"] = True
+
+
+
+def ensure_time_calculation_tables():
+    """Ensure the independent planning-only time calculation tables exist."""
+    if st.session_state.get("_time_calculation_tables_ready"):
+        return
+
+    statements = [
+        (
+            """
+            CREATE TABLE IF NOT EXISTS reklet.work_time_calculations (
+                id serial4 PRIMARY KEY,
+                object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
+                client_name text NOT NULL DEFAULT '',
+                object_name text NOT NULL DEFAULT '',
+                distance_km numeric NOT NULL DEFAULT 0,
+                loading_minutes numeric NOT NULL DEFAULT 240,
+                road_minutes numeric NOT NULL DEFAULT 240,
+                unloading_minutes numeric NOT NULL DEFAULT 240,
+                production_minutes numeric NOT NULL DEFAULT 0,
+                installation_minutes numeric NOT NULL DEFAULT 0,
+                transport_minutes numeric NOT NULL DEFAULT 720,
+                total_minutes numeric NOT NULL DEFAULT 0,
+                calculated_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+                CONSTRAINT work_time_distance_check CHECK (distance_km >= 0),
+                CONSTRAINT work_time_minutes_check CHECK (
+                    production_minutes >= 0
+                    AND installation_minutes >= 0
+                    AND transport_minutes >= 0
+                    AND total_minutes >= 0
+                )
+            )
+            """,
+            (),
+        ),
+        (
+            """
+            CREATE TABLE IF NOT EXISTS reklet.work_time_calculation_items (
+                id serial4 PRIMARY KEY,
+                calculation_id int4 NOT NULL REFERENCES reklet.work_time_calculations(id) ON DELETE CASCADE,
+                object_item_id int4 NOT NULL REFERENCES reklet.object_items(id) ON DELETE RESTRICT,
+                item_name text NOT NULL,
+                quantity int4 NOT NULL,
+                unit_cost numeric NOT NULL DEFAULT 0,
+                base_production_minutes numeric NOT NULL DEFAULT 0,
+                quantity_class text NOT NULL,
+                time_multiplier numeric NOT NULL DEFAULT 1,
+                production_minutes numeric NOT NULL DEFAULT 0,
+                installation_minutes numeric NOT NULL DEFAULT 0,
+                CONSTRAINT work_time_item_quantity_check CHECK (quantity > 0),
+                CONSTRAINT work_time_item_minutes_check CHECK (
+                    unit_cost >= 0
+                    AND base_production_minutes >= 0
+                    AND time_multiplier > 0
+                    AND production_minutes >= 0
+                    AND installation_minutes >= 0
+                )
+            )
+            """,
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.work_time_calculations ADD COLUMN IF NOT EXISTS client_name text NOT NULL DEFAULT ''",
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.work_time_calculations ADD COLUMN IF NOT EXISTS object_name text NOT NULL DEFAULT ''",
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.work_time_calculations ALTER COLUMN object_id DROP NOT NULL",
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.work_time_calculation_items ALTER COLUMN object_item_id DROP NOT NULL",
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.work_time_calculations DROP CONSTRAINT IF EXISTS work_time_calculations_object_id_fkey",
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.work_time_calculations ADD CONSTRAINT work_time_calculations_object_id_fkey FOREIGN KEY (object_id) REFERENCES reklet.objects(id) ON DELETE SET NULL",
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.work_time_calculation_items DROP CONSTRAINT IF EXISTS work_time_calculation_items_object_item_id_fkey",
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.work_time_calculation_items ADD CONSTRAINT work_time_calculation_items_object_item_id_fkey FOREIGN KEY (object_item_id) REFERENCES reklet.object_items(id) ON DELETE SET NULL",
+            (),
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS idx_work_time_calculations_object ON reklet.work_time_calculations(object_id)",
+            (),
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS idx_work_time_calculation_items_calc ON reklet.work_time_calculation_items(calculation_id)",
+            (),
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS idx_work_time_calculation_items_item ON reklet.work_time_calculation_items(object_item_id)",
+            (),
+        ),
+    ]
+
+    run_transaction(statements)
+    st.session_state["_time_calculation_tables_ready"] = True
 
 
 def ensure_object_item_material_costs(object_id):
