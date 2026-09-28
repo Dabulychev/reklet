@@ -147,11 +147,6 @@ def _render_delete_confirmation(calculation_id: int, calculations: pd.DataFrame)
 def render_time_calculation() -> None:
     ensure_time_calculation_tables()
     st.subheader("Расчёт времени")
-    st.caption(
-        "Расчёт используется только отделом планирования. "
-        "Изменение количества или состава изделий меняет новый расчёт времени; "
-        "сохранённые расчёты остаются отдельными историческими записями."
-    )
 
     source = get_time_calculation_source()
     if source.empty:
@@ -221,7 +216,6 @@ def render_time_calculation() -> None:
     if st.button(
         "Сохранить",
         key=f"time_save_{selected_object_id}",
-        type="primary",
         width="stretch",
     ):
         header = {
@@ -252,6 +246,89 @@ def render_time_calculation() -> None:
 
     if calculations.empty:
         st.info("Сохранённых расчётов пока нет.")
+        return
+
+    # Filters apply only to the saved calculations list.
+    # "Все заказчики" + "Все объекты" shows the complete history.
+    saved_client_values = (
+        calculations["client_name"]
+        .fillna("Без заказчика")
+        .astype(str)
+        .str.strip()
+        .replace("", "Без заказчика")
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+    saved_client_options = ["Все заказчики"] + saved_client_values
+
+    sf1, sf2 = st.columns(2)
+    with sf1:
+        saved_customer_filter = st.selectbox(
+            "Заказчик",
+            saved_client_options,
+            key="time_saved_filter_customer",
+        )
+
+    filtered_for_objects = calculations.copy()
+    filtered_for_objects["_client_filter_name"] = (
+        filtered_for_objects["client_name"]
+        .fillna("Без заказчика")
+        .astype(str)
+        .str.strip()
+        .replace("", "Без заказчика")
+    )
+    if saved_customer_filter != "Все заказчики":
+        filtered_for_objects = filtered_for_objects[
+            filtered_for_objects["_client_filter_name"] == saved_customer_filter
+        ].copy()
+
+    saved_object_values = (
+        filtered_for_objects["object_name"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace("", "Без названия")
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+
+    with sf2:
+        saved_object_filter = st.selectbox(
+            "Объект",
+            ["Все объекты"] + saved_object_values,
+            key="time_saved_filter_object",
+        )
+
+    calculations["_client_filter_name"] = (
+        calculations["client_name"]
+        .fillna("Без заказчика")
+        .astype(str)
+        .str.strip()
+        .replace("", "Без заказчика")
+    )
+    calculations["_object_filter_name"] = (
+        calculations["object_name"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace("", "Без названия")
+    )
+
+    if saved_customer_filter != "Все заказчики":
+        calculations = calculations[
+            calculations["_client_filter_name"] == saved_customer_filter
+        ].copy()
+    if saved_object_filter != "Все объекты":
+        calculations = calculations[
+            calculations["_object_filter_name"] == saved_object_filter
+        ].copy()
+
+    calculations = calculations.drop(columns=["_client_filter_name", "_object_filter_name"], errors="ignore")
+
+    if calculations.empty:
+        st.info("По выбранным фильтрам сохранённых расчётов нет.")
         return
 
     header_cols = st.columns([0.45, 1.45, 1.55, 1.0, 0.85, 0.85, 0.75, 0.85, 0.95, 0.85])
