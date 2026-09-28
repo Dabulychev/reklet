@@ -10,7 +10,7 @@ from database.migrations import (
     ensure_stage_movement_tables,
     ensure_object_item_material_costs,
 )
-from repositories.objects import get_objects
+from repositories.objects import get_stage_objects
 
 
 def _production_object_wip(object_id):
@@ -154,15 +154,62 @@ def render_production():
     st.header("Производство")
     ensure_stage_movement_tables()
 
-    objects=get_objects().sort_values("id",ascending=False).copy()
-    if objects.empty:
-        st.info("Объектов нет.")
+    stage_objects=get_stage_objects("production").sort_values("id",ascending=False).copy()
+    if stage_objects.empty:
+        st.info("В производстве нет незавершённых заданий.")
         return
 
-    object_options=[f"{int(r['id'])} — {r['object_name']} — {r['client_name'] or ''}" for _,r in objects.iterrows()]
-    object_map={x:int(x.split(" — ")[0]) for x in object_options}
-    selected_object=st.selectbox("Объект",object_options,key="production_object_table")
-    object_id=object_map[selected_object]
+    customer_options=["Все заказчики"] + sorted(
+        stage_objects["client_name"].fillna("").astype(str).str.strip().loc[lambda x: x!=""].unique().tolist()
+    )
+    selected_customer=st.selectbox(
+        "Заказчик",
+        customer_options,
+        key="production_customer_filter_v5"
+    )
+
+    filtered_objects=stage_objects.copy()
+    if selected_customer!="Все заказчики":
+        filtered_objects=filtered_objects[
+            filtered_objects["client_name"].fillna("").astype(str).str.strip().eq(selected_customer)
+        ].copy()
+
+    object_options=["Все объекты"] + [
+        f"{int(r['id'])} — {str(r['object_name']).strip()}"
+        for _,r in filtered_objects.iterrows()
+    ]
+    selected_object=st.selectbox(
+        "Объект",
+        object_options,
+        key="production_object_table"
+    )
+
+    if selected_object=="Все объекты":
+        overview_query="""
+            SELECT o.id AS object_id,o.object_name,c.name AS client_name,
+                   oi.id AS object_item_id,oi.item_name,oi.quantity_needed,
+                   COALESCE(oi.qty_new,0) AS qty_new,
+                   COALESCE(oi.qty_production,0) AS qty_production
+            FROM reklet.object_items oi
+            JOIN reklet.objects o ON o.id=oi.object_id
+            LEFT JOIN reklet.clients c ON c.id=o.client_id
+            WHERE (COALESCE(oi.qty_new,0)>0 OR COALESCE(oi.qty_production,0)>0)
+        """
+        overview_params=[]
+        if selected_customer!="Все заказчики":
+            overview_query += " AND c.name=%s"
+            overview_params.append(selected_customer)
+        overview_query += " ORDER BY o.object_name,oi.item_name"
+        overview=run_query(overview_query,tuple(overview_params),fetch=True)
+        overview.columns=["Объект ID","Объект","Заказчик","Изделие","Заказано","Осталось нового","В производстве"]
+        for col in ["Заказано","Осталось нового","В производстве"]:
+            overview[col]=pd.to_numeric(overview[col],errors="coerce").fillna(0).round(0).astype(int)
+        render_print_html("Производство — перечень заданий",overview,"print_production_overview_v5")
+        st.dataframe(overview,width="stretch",hide_index=True)
+        st.info("Для выполнения производственной операции выберите конкретный объект.")
+        return
+
+    object_id=int(selected_object.split(" — ")[0])
 
     production_df=run_query(
         """
@@ -179,7 +226,7 @@ def render_production():
         (object_id,),fetch=True
     )
     if production_df.empty:
-        st.success("Для выбранного объекта производство завершено.")
+        st.info("Для выбранного объекта сейчас нет незавершённых производственных заданий.")
         return
 
     ensure_object_item_material_costs(object_id)
