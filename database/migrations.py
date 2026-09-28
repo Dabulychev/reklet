@@ -464,6 +464,13 @@ def ensure_task_three_tables():
         ),
         (
             """
+            ALTER TABLE reklet.purchase_order_items
+            ADD COLUMN IF NOT EXISTS production_request_id int4 NULL
+            """,
+            (),
+        ),
+        (
+            """
             CREATE TABLE IF NOT EXISTS reklet.material_production_requests (
                 id serial4 PRIMARY KEY,
                 object_id int4 NOT NULL REFERENCES reklet.objects(id) ON DELETE RESTRICT,
@@ -476,7 +483,7 @@ def ensure_task_three_tables():
                 updated_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
                 notes text NULL,
                 CONSTRAINT material_production_requests_quantity_check CHECK (quantity_requested > 0),
-                CONSTRAINT material_production_requests_supplied_check CHECK (quantity_supplied >= 0 AND quantity_supplied <= quantity_requested),
+                CONSTRAINT material_production_requests_supplied_check CHECK (quantity_supplied >= 0),
                 CONSTRAINT material_production_requests_status_check CHECK (status IN ('sent','purchasing','ready','completed','cancelled'))
             )
             """,
@@ -548,6 +555,52 @@ def ensure_task_three_tables():
         ("CREATE INDEX IF NOT EXISTS idx_work_time_calculation_items_calc ON reklet.work_time_calculation_items(calculation_id)", ()),
         ("CREATE INDEX IF NOT EXISTS idx_work_time_calculation_items_item ON reklet.work_time_calculation_items(object_item_id)", ()),
     ]
+
+    statements.extend([
+        (
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname='purchase_order_items_production_request_id_fkey'
+                ) THEN
+                    ALTER TABLE reklet.purchase_order_items
+                    ADD CONSTRAINT purchase_order_items_production_request_id_fkey
+                    FOREIGN KEY (production_request_id)
+                    REFERENCES reklet.material_production_requests(id)
+                    ON DELETE SET NULL;
+                END IF;
+            END $$;
+            """,
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.material_production_requests DROP CONSTRAINT IF EXISTS material_production_requests_supplied_check",
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.material_production_requests ADD CONSTRAINT material_production_requests_supplied_check CHECK (quantity_supplied >= 0)",
+            (),
+        ),
+        (
+            "ALTER TABLE reklet.material_transactions DROP CONSTRAINT IF EXISTS material_transactions_operation_type_check",
+            (),
+        ),
+        (
+            """
+            ALTER TABLE reklet.material_transactions
+            ADD CONSTRAINT material_transactions_operation_type_check
+            CHECK (operation_type IN ('purchase','production_transfer','production_allocation','production_return'))
+            """,
+            (),
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS idx_purchase_order_items_production_request ON reklet.purchase_order_items(production_request_id)",
+            (),
+        ),
+    ])
 
     run_transaction(statements)
     st.session_state["_task_three_tables_ready"] = True
