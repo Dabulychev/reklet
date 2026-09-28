@@ -6,6 +6,7 @@ from core.dates import as_date
 from core.formatting import safe_int, safe_float
 from core.printing import render_print_html
 from core.ui import render_button_nav
+from core.instructions import render_page_instruction
 from database.migrations import ensure_stage_movement_tables
 from repositories.clients import get_clients
 from repositories.objects import get_objects, get_object_items
@@ -1638,6 +1639,14 @@ def render_objects():
                              contract_date, production_start, production_end, installation_date, installation_end)
                         )
                         st.success("Объект создан.")
+        if sub == "Содержимое объекта":
+            render_page_instruction("objects_content")
+        elif sub == "Добавить изделия в объект":
+            render_page_instruction("objects_add_products")
+        elif sub == "Управление объектами":
+            render_page_instruction("objects_management")
+        else:
+            render_page_instruction("objects")
 
 
 
