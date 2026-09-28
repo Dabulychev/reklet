@@ -56,13 +56,15 @@ def _format_qty(value):
 
 
 
-def _get_production_excess_map():
-    """Return globally available production excess by material."""
+def _get_production_excess_rows():
+    """Return global production excess by material, normalized to 2 decimals."""
     ensure_task_three_tables()
     df = run_query(
         """
         SELECT
             m.id AS material_id,
+            m.name AS material_name,
+            u.name AS unit_name,
             GREATEST(
                 COALESCE((
                     SELECT SUM(mt.quantity)
@@ -97,17 +99,26 @@ def _get_production_excess_map():
                 0
             ) AS excess_quantity
         FROM reklet.materials m
+        LEFT JOIN reklet.units u ON u.id=m.unit_id
         ORDER BY m.name
         """,
         fetch=True,
     )
     if df.empty:
+        return df
+    df['excess_quantity'] = pd.to_numeric(df['excess_quantity'], errors='coerce').fillna(0.0).round(2)
+    # Do not show floating-point dust such as 0.000002 as a real excess.
+    df = df[df['excess_quantity'] > 0].copy()
+    return df
+
+
+def _get_production_excess_map():
+    df = _get_production_excess_rows()
+    if df.empty:
         return {}
-    df['excess_quantity'] = pd.to_numeric(df['excess_quantity'], errors='coerce').fillna(0.0)
     return {
         safe_int(row['material_id']): safe_float(row['excess_quantity'])
         for _, row in df.iterrows()
-        if safe_float(row['excess_quantity']) > 1e-9
     }
 
 
@@ -126,6 +137,7 @@ def _get_production_requests_open():
             oi.item_name,
             m.name AS material_name,
             u.name AS unit_name,
+            COALESCE(m.stock_quantity,0) AS stock_quantity,
             r.quantity_requested,
             r.quantity_supplied,
             COALESCE(SUM(CASE WHEN po.id IS NOT NULL THEN poi.quantity_ordered ELSE 0 END),0) AS quantity_ordered,
@@ -145,6 +157,7 @@ def _get_production_requests_open():
         GROUP BY
             r.id,r.object_id,r.object_item_id,r.material_id,
             c.name,o.object_name,oi.item_name,m.name,u.name,
+            m.stock_quantity,
             r.quantity_requested,r.quantity_supplied
         ORDER BY r.created_at,r.id
         """,
@@ -356,24 +369,30 @@ def _render_production_requests_expander():
 
         st.markdown('---')
         st.subheader('Выполнить заказ производства')
+
+        # Передача возможна не только из материалов, которые пришли по этой
+        # закупке. Любой фактический остаток на общем складе можно передать
+        # производству. Поэтому заявка может исполняться частями.
         ready = requests.copy()
-        ready['received_total'] = pd.to_numeric(ready['quantity_received'], errors='coerce').fillna(0.0)
+        ready['stock_available'] = pd.to_numeric(ready['stock_quantity'], errors='coerce').fillna(0.0).clip(lower=0)
         ready['supplied_total'] = pd.to_numeric(ready['quantity_supplied'], errors='coerce').fillna(0.0)
-        ready['free_received'] = (ready['received_total'] - ready['supplied_total']).clip(lower=0)
-        ready = ready[ready['free_received'] > 1e-9].copy()
+        ready['requested_total'] = pd.to_numeric(ready['quantity_requested'], errors='coerce').fillna(0.0)
+        ready['request_remaining'] = (ready['requested_total'] - ready['supplied_total']).clip(lower=0)
 
         if ready.empty:
-            st.info('Полученных материалов, доступных для передачи в производство, пока нет.')
+            st.info('Открытых заявок производства нет.')
         else:
             second = ready[[
                 'request_id','client_name','object_name','item_name','material_name','unit_name',
-                'quantity_requested','quantity_supplied','free_received'
+                'requested_total','supplied_total','request_remaining','stock_available'
             ]].copy()
             second['Передать в производство'] = 0.0
             second.columns = [
                 'Заявка ID','Заказчик','Объект','Изделие','Материал','Единица',
-                'Требуется производству','Уже передано','Свободно на складе','Передать в производство'
+                'Заказано производством','Уже передано','Осталось по заявке','Свободно на складе',
+                'Передать в производство'
             ]
+
             with st.form('production_request_issue_form', clear_on_submit=False):
                 issue_edit = st.data_editor(
                     second,
@@ -387,36 +406,69 @@ def _render_production_requests_expander():
                         'Изделие': st.column_config.TextColumn('Изделие', disabled=True),
                         'Материал': st.column_config.TextColumn('Материал', disabled=True),
                         'Единица': st.column_config.TextColumn('Единица', disabled=True),
-                        'Требуется производству': st.column_config.NumberColumn('Требуется производству', disabled=True, format='%.2f'),
+                        'Заказано производством': st.column_config.NumberColumn('Заказано производством', disabled=True, format='%.2f'),
                         'Уже передано': st.column_config.NumberColumn('Уже передано', disabled=True, format='%.2f'),
+                        'Осталось по заявке': st.column_config.NumberColumn('Осталось по заявке', disabled=True, format='%.2f'),
                         'Свободно на складе': st.column_config.NumberColumn('Свободно на складе', disabled=True, format='%.2f'),
                         'Передать в производство': st.column_config.NumberColumn('Передать в производство', min_value=0.0, step=0.01, format='%.2f'),
                     },
-                    disabled=['Заявка ID','Заказчик','Объект','Изделие','Материал','Единица','Требуется производству','Уже передано','Свободно на складе'],
+                    disabled=[
+                        'Заявка ID','Заказчик','Объект','Изделие','Материал','Единица',
+                        'Заказано производством','Уже передано','Осталось по заявке','Свободно на складе'
+                    ],
                 )
                 execute_issue = st.form_submit_button('Выполнить', use_container_width=True)
+
             pending_issue_key = 'pending_production_issue'
             if execute_issue:
                 issue_lines = []
                 errors = []
+                totals_by_material = {}
+
                 for idx, row in issue_edit.iterrows():
                     qty = safe_float(row['Передать в производство'])
                     if qty <= 1e-9:
                         continue
-                    raw = ready.loc[int(idx)]
-                    free_qty = safe_float(raw['free_received'])
-                    if qty > free_qty + 1e-9:
-                        errors.append(f"{row['Материал']}: доступно только {free_qty:.2f}.")
-                    else:
-                        issue_lines.append({
-                            'request_id': safe_int(raw['request_id']),
-                            'object_id': safe_int(raw['object_id']),
-                            'material_id': safe_int(raw['material_id']),
-                            'material_name': str(raw['material_name']),
-                            'object_name': str(raw['object_name']),
-                            'requested_remaining': max(safe_float(raw['quantity_requested']) - safe_float(raw['quantity_supplied']),0.0),
-                            'quantity': qty,
-                        })
+                    raw = ready.iloc[int(idx)]
+                    request_remaining = max(safe_float(raw['request_remaining']), 0.0)
+                    stock_available = max(safe_float(raw['stock_available']), 0.0)
+                    material_id = safe_int(raw['material_id'])
+                    totals_by_material[material_id] = totals_by_material.get(material_id, 0.0) + qty
+                    issue_lines.append({
+                        'request_id': safe_int(raw['request_id']),
+                        'object_id': safe_int(raw['object_id']),
+                        'material_id': material_id,
+                        'material_name': str(raw['material_name']),
+                        'object_name': str(raw['object_name']),
+                        'requested_remaining': request_remaining,
+                        'quantity': qty,
+                        'stock_available': stock_available,
+                        'unit_name': str(raw['unit_name'] or ''),
+                    })
+
+                # Several open requests may reference the same material.
+                # Validate the whole batch against the real stock so one
+                # material cannot be issued twice from the same remaining balance.
+                stock_by_material = {}
+                for _, raw in ready.iterrows():
+                    mid = safe_int(raw['material_id'])
+                    stock_by_material[mid] = max(safe_float(raw['stock_quantity']), 0.0)
+                for mid, total in totals_by_material.items():
+                    available = stock_by_material.get(mid, 0.0)
+                    if total > available + 1e-9:
+                        material_name = next(
+                            (x['material_name'] for x in issue_lines if x['material_id'] == mid),
+                            str(mid),
+                        )
+                        unit_name = next(
+                            (x['unit_name'] for x in issue_lines if x['material_id'] == mid),
+                            '',
+                        )
+                        errors.append(
+                            f"{material_name}: суммарная передача {_format_qty(total)} {unit_name}, "
+                            f"а на складе только {_format_qty(available)} {unit_name}."
+                        )
+
                 if not issue_lines:
                     st.warning('Укажите количество для передачи хотя бы по одной заявке.')
                 elif errors:
@@ -432,6 +484,8 @@ def _render_production_requests_expander():
                     'material_name','object_name','quantity','requested_remaining'
                 ]].copy()
                 preview.columns = ['Материал','Объект','Передать','Осталось по заявке']
+                preview['Передать'] = preview['Передать'].map(_format_qty)
+                preview['Осталось по заявке'] = preview['Осталось по заявке'].map(_format_qty)
                 st.dataframe(preview, width='stretch', hide_index=True)
                 c1,c2=st.columns(2)
                 with c1:
@@ -468,21 +522,17 @@ def _render_production_requests_expander():
                                     (excess,line['material_id']),
                                 ),
                             ])
-                        new_supplied = line['requested_remaining'] if to_object >= line['requested_remaining'] else None
-                        if new_supplied is not None:
+                        supplied_increment=to_object
+                        if supplied_increment>1e-9:
                             statements.append((
-                                "UPDATE reklet.material_production_requests SET quantity_supplied=quantity_requested,status='completed',updated_at=timezone('utc'::text,now()) WHERE id=%s",
-                                (line['request_id'],),
+                                "UPDATE reklet.material_production_requests SET quantity_supplied=LEAST(quantity_requested,quantity_supplied+%s),status=CASE WHEN quantity_supplied+%s>=quantity_requested THEN 'completed' ELSE 'ready' END,updated_at=timezone('utc'::text,now()) WHERE id=%s",
+                                (supplied_increment,supplied_increment,line['request_id']),
                             ))
-                        else:
-                            statements.append((
-                                "UPDATE reklet.material_production_requests SET quantity_supplied=LEAST(quantity_requested,quantity_supplied+%s),status='ready',updated_at=timezone('utc'::text,now()) WHERE id=%s",
-                                (to_object,line['request_id']),
-                            ))
-                    run_transaction(statements)
+                    if statements:
+                        run_transaction(statements)
                     st.session_state.pop(pending_issue_key,None)
                     st.session_state.pop('production_request_issue_editor',None)
-                    st.success('Материалы переданы в производство. Излишки учтены отдельно.')
+                    st.success('Материалы переданы в производство. Заявка останется открытой до полного исполнения; излишки учтены отдельно.')
                     st.rerun()
 
 def render_warehouse():
@@ -490,11 +540,10 @@ def render_warehouse():
     ensure_task_three_tables()
     st.header("Склад материалов")
 
-    # Заявки производства показываются выше всего содержимого склада.
-    # Сам блок отсутствует, когда активных заявок нет.
-    _render_production_requests_expander()
-
-    # Только шесть актуальных разделов. Смена раздела выполняется через
+    # Только шесть актуальных разделов. Дополнительный блок
+    # «Заказ с производства» не является пунктом навигации и рисуется
+    # ниже этих шести кнопок, поэтому при входе в склад всегда видно ровно
+    # шесть пунктов меню.
     # callback, поэтому нет промежуточного рендера старого набора кнопок.
     material_sections = (
         ("Перечень материалов", "list"),
@@ -522,6 +571,11 @@ def render_warehouse():
                     args=(value,),
                 )
 
+    # Заявки производства показываются непосредственно под шестью кнопками
+    # навигации и над содержимым выбранного раздела. Блок полностью скрыт,
+    # если открытых заявок нет.
+    _render_production_requests_expander()
+
     active_material_section = st.session_state["warehouse_section"]
     materials=get_materials_with_categories()
     categories=get_material_categories()
@@ -545,6 +599,16 @@ def render_warehouse():
                 "ID","Материал","Категория","Единица","Цена за единицу",
                 "На складе","Коэффициент отходов"
             ]
+            # Do not expose floating-point artefacts such as 0.000002 in
+            # the user-facing material register. Quantity values are shown
+            # with at most two decimals; underlying DB values stay numeric.
+            display["Цена за единицу"] = pd.to_numeric(
+                display["Цена за единицу"], errors="coerce"
+            ).fillna(0.0).map(lambda v: f"{v:.2f}")
+            display["На складе"] = display["На складе"].map(_format_qty)
+            display["Коэффициент отходов"] = pd.to_numeric(
+                display["Коэффициент отходов"], errors="coerce"
+            ).fillna(0.0).map(lambda v: f"{v:.2f}")
 
             st.dataframe(display,width="stretch",hide_index=True)
             render_print_html(
@@ -999,6 +1063,22 @@ def render_warehouse():
                                 run_query("DELETE FROM reklet.material_categories WHERE id=%s",(cid,))
                                 st.success("Категория удалена.")
                                 st.rerun()
+
+        # --------------------------------------------------------
+        # ИЗЛИШКИ НА ПРОИЗВОДСТВЕ — ОБЩИЙ ОСТАТОК
+        # Всегда после перечня материалов.
+        # --------------------------------------------------------
+        st.markdown("---")
+        st.subheader("Излишки на производстве")
+        list_excess = _get_production_excess_rows()
+        if list_excess.empty:
+            st.info("Излишков на производстве нет.")
+        else:
+            excess_view = list_excess[["material_id","material_name","unit_name","excess_quantity"]].copy()
+            excess_view.columns = ["ID","Материал","Единица","Излишки на производстве"]
+            excess_view["Излишки на производстве"] = excess_view["Излишки на производстве"].map(_format_qty)
+            st.dataframe(excess_view, width="stretch", hide_index=True)
+            render_print_html("Излишки на производстве", excess_view, "print_production_excess_list")
 
     elif active_material_section=="add":
         st.subheader("Добавить материал")
