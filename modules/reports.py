@@ -6,6 +6,7 @@ import streamlit as st
 from core.db import run_query
 from core.formatting import money
 from core.printing import printable_html, render_print_html
+from core.instructions import render_page_instruction
 from database.migrations import ensure_material_planning_tables
 from modules.time_calculation import render_time_calculation
 
@@ -719,3 +720,7 @@ def render_reports():
             stock_need_view = need.rename(columns={"object_name":"Объект","client_name":"Заказчик","item_name":"Изделие","material":"Материал","required_quantity":"Требуется","stock_quantity":"На складе"})
             st.dataframe(stock_need_view, width="stretch", hide_index=True)
             render_print_html("Потребность материалов по незавершённым объектам", stock_need_view, "print_stock_object_need")
+    if st.session_state.get("reports_section") == "Расчёт времени":
+        render_page_instruction("time_calculation")
+    else:
+        render_page_instruction("reports")
