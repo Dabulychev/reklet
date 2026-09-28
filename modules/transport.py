@@ -3,6 +3,7 @@ import streamlit as st
 from core.db import run_query, run_transaction
 from core.printing import render_print_html
 from core.formatting import safe_int
+from core.instructions import render_page_instruction
 from database.migrations import ensure_stage_movement_tables
 from modules.stage_filter_helper import get_stage_work_items, render_stage_object_filters
 
@@ -77,6 +78,7 @@ def render_transport():
     if not movements.empty:
         movements=movements.rename(columns={"object_name":"Объект","client_name":"Заказчик","item_name":"Изделие","operation_type":"Операция","quantity":"Количество","created_at":"Когда"}); transport_movement_view = movements[["Объект","Заказчик","Изделие","Операция","Количество","Когда"]].copy(); st.dataframe(transport_movement_view,width="stretch",hide_index=True); render_print_html("Движения транспорта", transport_movement_view, "print_transport_movements")
     else: st.info("Движений транспорта пока нет.")
+    render_page_instruction("transport")
 
     # ============================================================
     # INSTALLATION
