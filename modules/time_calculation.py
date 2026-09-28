@@ -24,6 +24,17 @@ def _as_display_number(value) -> float:
         return 0.0
 
 
+def _format_minutes(value) -> str:
+    """Display minutes as HH:MM; hours are not capped at 24."""
+    try:
+        total_minutes = int(round(float(value)))
+    except Exception:
+        total_minutes = 0
+    total_minutes = max(total_minutes, 0)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{hours:02d}:{minutes:02d}"
+
+
 def _format_datetime(value) -> str:
     if value is None or pd.isna(value):
         return ""
@@ -59,10 +70,10 @@ def _render_saved_detail(calculation_id: int, calculations: pd.DataFrame) -> Non
                 "Объект": str(header.get("object_name") or ""),
                 "Элемент": str(item.get("item_name") or ""),
                 "Количество": int(item.get("quantity") or 0),
-                "Время производства, мин": _as_display_number(item.get("production_minutes")),
-                "Время транспортировки, мин": "",
-                "Время монтажа, мин": _as_display_number(item.get("installation_minutes")),
-                "Общее время, мин": _as_display_number(
+                "Время производства": _format_minutes(item.get("production_minutes")),
+                "Время транспортировки": "",
+                "Время монтажа": _format_minutes(item.get("installation_minutes")),
+                "Общее время": _format_minutes(
                     float(item.get("production_minutes") or 0)
                     + float(item.get("installation_minutes") or 0)
                 ),
@@ -78,10 +89,10 @@ def _render_saved_detail(calculation_id: int, calculations: pd.DataFrame) -> Non
             "Объект": str(header.get("object_name") or ""),
             "Элемент": "ИТОГО",
             "Количество": int(sum(int(x["Количество"]) for x in rows)),
-            "Время производства, мин": _as_display_number(header.get("production_minutes")),
-            "Время транспортировки, мин": transport_minutes,
-            "Время монтажа, мин": _as_display_number(header.get("installation_minutes")),
-            "Общее время, мин": _as_display_number(header.get("total_minutes")),
+            "Время производства": _format_minutes(header.get("production_minutes")),
+            "Время транспортировки": _format_minutes(transport_minutes),
+            "Время монтажа": _format_minutes(header.get("installation_minutes")),
+            "Общее время": _format_minutes(header.get("total_minutes")),
         }
         rows.append(total_row)
 
@@ -201,16 +212,18 @@ def render_time_calculation() -> None:
 
     summary_view = pd.DataFrame([
         {
-            "Производство, мин": _as_display_number(snapshot["production_minutes"]),
-            "Транспортировка, мин": _as_display_number(snapshot["transport_minutes"]),
-            "Монтаж, мин": _as_display_number(snapshot["installation_minutes"]),
-            "Всего, мин": _as_display_number(snapshot["total_minutes"]),
+            "Производство": _format_minutes(snapshot["production_minutes"]),
+            "Транспортировка": _format_minutes(snapshot["transport_minutes"]),
+            "Монтаж": _format_minutes(snapshot["installation_minutes"]),
+            "Всего": _format_minutes(snapshot["total_minutes"]),
         }
     ])
     st.dataframe(summary_view, width="stretch", hide_index=True)
     st.caption(
-        f"Транспорт: погрузка 240 мин + дорога { _as_display_number(snapshot['transport']['road_minutes']) } мин "
-        f"+ разгрузка 240 мин; расстояние {_as_display_number(snapshot['transport']['distance_km'])} км."
+        f"Транспорт: погрузка {_format_minutes(snapshot['transport']['loading_minutes'])} + "
+        f"дорога {_format_minutes(snapshot['transport']['road_minutes'])} + "
+        f"разгрузка {_format_minutes(snapshot['transport']['unloading_minutes'])}; "
+        f"расстояние {_as_display_number(snapshot['transport']['distance_km'])} км."
     )
 
     if st.button(
@@ -360,13 +373,13 @@ def render_time_calculation() -> None:
         with c4:
             st.write(_format_datetime(row.get("calculated_at")))
         with c5:
-            st.write(f"{_as_display_number(row.get('production_minutes'))}")
+            st.write(_format_minutes(row.get("production_minutes")))
         with c6:
-            st.write(f"{_as_display_number(row.get('transport_minutes'))}")
+            st.write(_format_minutes(row.get("transport_minutes")))
         with c7:
-            st.write(f"{_as_display_number(row.get('installation_minutes'))}")
+            st.write(_format_minutes(row.get("installation_minutes")))
         with c8:
-            st.write(f"{_as_display_number(row.get('total_minutes'))}")
+            st.write(_format_minutes(row.get("total_minutes")))
         with c9:
             if st.button("Подробнее", key=f"time_detail_{calculation_id}", width="stretch"):
                 st.session_state["time_detail_id"] = calculation_id
