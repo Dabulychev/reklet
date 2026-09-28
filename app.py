@@ -50,8 +50,39 @@ if "demo_mode" not in st.session_state:
 
 if not st.session_state["authentication_status"]:
 
-    st.title("Reklet — Управление производством")
-    st.subheader("Войти")
+    st.markdown(
+        """
+        <style>
+        .reklet-login-title {
+            font-size: 3.2rem;
+            line-height: 1.05;
+            font-weight: 700;
+            margin-bottom: 0.45rem;
+        }
+        .reklet-login-subtitle {
+            font-size: 0.9rem;
+            line-height: 1.45;
+            margin-bottom: 1rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        """
+        <div class="reklet-login-header">
+            <div class="reklet-login-title">Reklet</div>
+            <div class="reklet-login-subtitle">
+                Для входа введите<br>
+                <strong>demo demo</strong>.<br>
+                В режиме демо вы можете добавлять, корректировать, удалять, проводить акции.<br>
+                Все данные после закрытия окна будут удалены.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
     with st.form("login_form"):
 
