@@ -4,6 +4,7 @@ import streamlit as st
 from core.db import run_query
 from core.printing import render_print_html
 from core.ui import render_button_nav
+from core.instructions import render_page_instruction
 from repositories.materials import (
     get_materials_with_categories,
     get_material_categories,
@@ -327,4 +328,4 @@ def render_suppliers():
                         f"print_supplier_search_{material_id}",
                         subtitle=f"Категория: {search_category}"
                     )
-
+    render_page_instruction("suppliers")
