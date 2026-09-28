@@ -3,6 +3,7 @@ import streamlit as st
 
 from core.db import run_query
 from core.printing import render_print_html
+from core.instructions import render_page_instruction
 from database.migrations import ensure_material_planning_tables, ensure_object_item_material_costs
 
 def render_payroll():
@@ -293,5 +294,4 @@ def render_payroll():
         "Количество берётся из object_items.quantity_needed — это плановая зарплата "
         "за всё количество изделий объекта, независимо от фактически выполненных работ."
     )
-
-
+    render_page_instruction("payroll")
