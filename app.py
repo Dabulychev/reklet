@@ -74,9 +74,9 @@ if not st.session_state["authentication_status"]:
         <div class="reklet-login-header">
             <div class="reklet-login-title">Reklet</div>
             <div class="reklet-login-subtitle">
-                Для входа введите<br>
-                <strong>demo demo</strong>.<br>
+                Для входа введите Логин: <strong>demo</strong> Пароль: <strong>demo</strong>.<br>
                 В режиме демо вы можете добавлять, корректировать, удалять, проводить акции.<br>
+                Внизу страниц находятся раскрывающиеся инструкции — описание страницы.<br>
                 Все данные после закрытия окна будут удалены.
             </div>
         </div>
