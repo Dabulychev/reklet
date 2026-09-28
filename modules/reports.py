@@ -7,6 +7,7 @@ from core.db import run_query
 from core.formatting import money
 from core.printing import printable_html, render_print_html
 from database.migrations import ensure_material_planning_tables
+from modules.time_calculation import render_time_calculation
 
 
 def movement_options(movements, column, first_label="Все"):
@@ -34,7 +35,7 @@ def render_reports():
     if "reports_section" not in st.session_state:
         st.session_state["reports_section"] = "Сводные таблицы"
 
-    rb1, rb2, rb3, rb4, rb5 = st.columns(5)
+    rb1, rb2, rb3, rb4, rb5, rb6 = st.columns(6)
 
     with rb1:
         if st.button("Сводные таблицы", key="reports_summary_btn", use_container_width=True):
@@ -55,6 +56,10 @@ def render_reports():
     with rb5:
         if st.button("Все движения", key="reports_movements_btn", use_container_width=True):
             st.session_state["reports_section"] = "Все движения"
+            st.rerun()
+    with rb6:
+        if st.button("Расчёт времени", key="reports_time_btn", use_container_width=True):
+            st.session_state["reports_section"] = "Расчёт времени"
             st.rerun()
 
     st.markdown("---")
@@ -126,9 +131,15 @@ def render_reports():
         report_df["Остаток"] = (report_df["quantity_needed"] - report_df["qty_installed"]).clip(lower=0)
 
     # ========================================================
+    # 0. TIME CALCULATION
+    # ========================================================
+    if st.session_state["reports_section"] == "Расчёт времени":
+        render_time_calculation()
+
+    # ========================================================
     # 1. SUMMARY TABLES
     # ========================================================
-    if st.session_state["reports_section"] == "Сводные таблицы":
+    elif st.session_state["reports_section"] == "Сводные таблицы":
 
         st.subheader("По заказчикам")
 
