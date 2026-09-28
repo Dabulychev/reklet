@@ -328,27 +328,6 @@ def ensure_material_planning_tables():
             )
             if not col_check.empty:
                 st.session_state['_material_planning_tables_ready'] = True
-                if not st.session_state.get('_material_cost_snapshot_backfill_attempted'):
-                    try:
-                        run_query(
-                            """
-                            INSERT INTO reklet.object_item_material_costs
-                                (object_item_id, material_id, quantity_per_unit, waste_coefficient, unit_cost)
-                            SELECT oi.id, ptm.material_id,
-                                   COALESCE(ptm.quantity_per_unit,0),
-                                   COALESCE(ptm.waste_coefficient,m.default_waste_coefficient,1),
-                                   COALESCE(m.cost_per_unit,0)
-                            FROM reklet.object_items oi
-                            JOIN reklet.product_template_materials ptm
-                              ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
-                            JOIN reklet.materials m ON m.id=ptm.material_id
-                            ON CONFLICT(object_item_id,material_id) DO NOTHING
-                            """
-                        )
-                    except Exception:
-                        # Snapshot backfill is best-effort. The schema itself is already ready.
-                        pass
-                    st.session_state['_material_cost_snapshot_backfill_attempted'] = True
                 return
     except Exception:
         # Fall through to the idempotent CREATE/ALTER statements below.
@@ -421,27 +400,7 @@ def ensure_material_planning_tables():
     run_transaction(schema_statements)
     st.session_state['_material_planning_tables_ready'] = True
 
-    if not st.session_state.get('_material_cost_snapshot_backfill_attempted'):
-        try:
-            run_query(
-                """
-                INSERT INTO reklet.object_item_material_costs
-                    (object_item_id, material_id, quantity_per_unit, waste_coefficient, unit_cost)
-                SELECT oi.id, ptm.material_id,
-                       COALESCE(ptm.quantity_per_unit,0),
-                       COALESCE(ptm.waste_coefficient,m.default_waste_coefficient,1),
-                       COALESCE(m.cost_per_unit,0)
-                FROM reklet.object_items oi
-                JOIN reklet.product_template_materials ptm
-                  ON ptm.product_template_id=COALESCE(oi.product_template_id,oi.template_id)
-                JOIN reklet.materials m ON m.id=ptm.material_id
-                ON CONFLICT(object_item_id,material_id) DO NOTHING
-                """
-            )
-        except Exception:
-            # Snapshot backfill is best-effort. The schema itself is already ready.
-            pass
-        st.session_state['_material_cost_snapshot_backfill_attempted'] = True
+
 
 
 def ensure_task_three_tables():
@@ -624,6 +583,11 @@ def ensure_object_item_material_costs(object_id):
           ON ptm.product_template_id = COALESCE(oi.product_template_id, oi.template_id)
         JOIN reklet.materials m ON m.id = ptm.material_id
         WHERE oi.object_id=%s
+          AND NOT EXISTS (
+              SELECT 1
+              FROM reklet.object_item_material_costs existing
+              WHERE existing.object_item_id=oi.id
+          )
         ON CONFLICT (object_item_id, material_id) DO NOTHING
         """,
         (object_id,),
