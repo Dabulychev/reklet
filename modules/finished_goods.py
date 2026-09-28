@@ -4,6 +4,7 @@ import streamlit as st
 from core.db import run_query, run_transaction
 from core.formatting import safe_int
 from core.printing import render_print_html
+from core.instructions import render_page_instruction
 from database.migrations import ensure_stage_movement_tables
 from repositories.objects import get_stage_objects
 
@@ -129,3 +130,4 @@ def render_finished_goods():
         finished_movement_view = movements[["Объект","Заказчик","Изделие","Операция","Количество","Когда"]].copy()
         st.dataframe(finished_movement_view, width="stretch", hide_index=True)
         render_print_html("Движения по складу готовой продукции", finished_movement_view, "print_finished_goods_movements")
+    render_page_instruction("finished_goods")
