@@ -4,6 +4,7 @@ import streamlit as st
 from core.db import get_connection, run_query, run_transaction
 from core.formatting import safe_float, safe_int
 from core.printing import render_print_html
+from core.instructions import render_page_instruction
 from database.migrations import ensure_material_planning_tables, ensure_task_three_tables
 from repositories.clients import get_clients
 from repositories.objects import get_objects
@@ -1741,6 +1742,14 @@ def render_warehouse():
         if movements.empty: st.info("Движений материалов пока нет.")
         else:
             view=movements.rename(columns={"tx_date":"Дата","operation_name":"Операция","client_name":"Заказчик","object_name":"Объект","product_name":"Изделие","material_name":"Материал","supplier_name":"Поставщик","quantity":"Количество","unit_price":"Цена"})[["Дата","Операция","Заказчик","Объект","Изделие","Материал","Поставщик","Количество","Цена"]]; st.dataframe(view,width="stretch",hide_index=True); render_print_html("Движение материалов",view,"print_material_movements")
+    if active_material_section == "planning":
+        render_page_instruction("planning")
+    elif active_material_section == "purchase":
+        render_page_instruction("purchase")
+    elif active_material_section == "issue":
+        render_page_instruction("issue")
+    else:
+        render_page_instruction("materials")
 
 
 
