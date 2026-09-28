@@ -4,6 +4,7 @@ import streamlit as st
 from core.db import run_query, run_transaction
 from core.formatting import safe_int
 from core.printing import render_print_html
+from core.instructions import render_page_instruction
 from database.migrations import ensure_stage_movement_tables
 from repositories.objects import get_stage_objects
 
@@ -120,3 +121,4 @@ def render_installation():
         render_print_html("Движения по монтажу",installation_movement_view,"print_installation_movements")
     else:
         st.info("Движений монтажа пока нет.")
+    render_page_instruction("installation")
