@@ -3,6 +3,7 @@ import streamlit as st
 
 from core.db import run_query, run_transaction
 from core.printing import render_print_html
+from core.instructions import render_page_instruction
 from repositories.clients import get_clients
 
 
@@ -245,3 +246,4 @@ def render_clients():
                 )
                 st.success("Клиент добавлен.")
                 st.rerun()
+    render_page_instruction("clients")
