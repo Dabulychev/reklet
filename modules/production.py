@@ -4,6 +4,7 @@ import streamlit as st
 from core.db import run_query, run_transaction
 from core.formatting import safe_float, safe_int
 from core.printing import render_print_html
+from core.instructions import render_page_instruction
 from database.migrations import (
     ensure_material_planning_tables,
     ensure_task_three_tables,
@@ -402,3 +403,4 @@ def render_production():
             st.session_state.pop(pending_order_key,None)
             st.success('Заявка на материалы отправлена на склад.')
             st.rerun()
+    render_page_instruction("production")
