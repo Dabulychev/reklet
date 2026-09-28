@@ -4,6 +4,7 @@ import streamlit as st
 from core.db import run_query, run_transaction
 from core.formatting import safe_int, safe_float
 from core.printing import render_print_html
+from core.instructions import render_page_instruction
 from repositories.clients import get_clients
 from repositories.materials import (
     get_materials_with_categories,
@@ -442,3 +443,4 @@ def render_products():
                 templates["client_name"].fillna("").astype(str).str.strip().eq(selected_client)
             ].copy()
         _render_product_specification(templates)
+    render_page_instruction("products")
