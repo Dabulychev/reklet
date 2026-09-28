@@ -4,7 +4,7 @@ import streamlit as st
 from core.db import get_connection, run_query, run_transaction
 from core.formatting import safe_float, safe_int
 from core.printing import render_print_html
-from database.migrations import ensure_material_planning_tables
+from database.migrations import ensure_material_planning_tables, ensure_task_three_tables
 from repositories.clients import get_clients
 from repositories.objects import get_objects
 from repositories.materials import (
@@ -55,20 +55,455 @@ def _format_qty(value):
     return f"{number:.2f}".rstrip("0").rstrip(".") or "0"
 
 
+
+def _get_production_excess_map():
+    """Return globally available production excess by material."""
+    ensure_task_three_tables()
+    df = run_query(
+        """
+        SELECT
+            m.id AS material_id,
+            GREATEST(
+                COALESCE((
+                    SELECT SUM(mt.quantity)
+                    FROM reklet.material_transactions mt
+                    WHERE mt.material_id=m.id
+                      AND mt.object_id IS NULL
+                      AND mt.operation_type='production_transfer'
+                      AND mt.transaction_type='OUT'
+                ),0)
+                - COALESCE((
+                    SELECT SUM(mt.quantity)
+                    FROM reklet.material_transactions mt
+                    WHERE mt.material_id=m.id
+                      AND mt.operation_type='production_allocation'
+                      AND mt.transaction_type='IN'
+                ),0)
+                - COALESCE((
+                    SELECT SUM(mt.quantity)
+                    FROM reklet.material_transactions mt
+                    WHERE mt.material_id=m.id
+                      AND mt.object_id IS NULL
+                      AND mt.operation_type='production_return'
+                      AND mt.transaction_type='IN'
+                ),0)
+                - COALESCE((
+                    SELECT SUM(mw.quantity)
+                    FROM reklet.material_waste_transactions mw
+                    WHERE mw.material_id=m.id
+                      AND mw.object_id IS NULL
+                      AND mw.source_type='production'
+                ),0),
+                0
+            ) AS excess_quantity
+        FROM reklet.materials m
+        ORDER BY m.name
+        """,
+        fetch=True,
+    )
+    if df.empty:
+        return {}
+    df['excess_quantity'] = pd.to_numeric(df['excess_quantity'], errors='coerce').fillna(0.0)
+    return {
+        safe_int(row['material_id']): safe_float(row['excess_quantity'])
+        for _, row in df.iterrows()
+        if safe_float(row['excess_quantity']) > 1e-9
+    }
+
+
+def _get_production_requests_open():
+    """Open production requests together with linked PO/order/receipt totals."""
+    ensure_task_three_tables()
+    return run_query(
+        """
+        SELECT
+            r.id AS request_id,
+            r.object_id,
+            r.object_item_id,
+            r.material_id,
+            c.name AS client_name,
+            o.object_name,
+            oi.item_name,
+            m.name AS material_name,
+            u.name AS unit_name,
+            r.quantity_requested,
+            r.quantity_supplied,
+            COALESCE(SUM(CASE WHEN po.id IS NOT NULL THEN poi.quantity_ordered ELSE 0 END),0) AS quantity_ordered,
+            COALESCE(SUM(CASE WHEN po.id IS NOT NULL THEN poi.quantity_received ELSE 0 END),0) AS quantity_received
+        FROM reklet.material_production_requests r
+        JOIN reklet.objects o ON o.id=r.object_id
+        LEFT JOIN reklet.clients c ON c.id=o.client_id
+        JOIN reklet.object_items oi ON oi.id=r.object_item_id
+        JOIN reklet.materials m ON m.id=r.material_id
+        LEFT JOIN reklet.units u ON u.id=m.unit_id
+        LEFT JOIN reklet.purchase_order_items poi ON poi.production_request_id=r.id
+        LEFT JOIN reklet.purchase_orders po
+          ON po.id=poi.purchase_order_id
+         AND po.status<>'cancelled'
+        WHERE r.status IN ('sent','purchasing','ready')
+          AND r.quantity_supplied < r.quantity_requested
+        GROUP BY
+            r.id,r.object_id,r.object_item_id,r.material_id,
+            c.name,o.object_name,oi.item_name,m.name,u.name,
+            r.quantity_requested,r.quantity_supplied
+        ORDER BY r.created_at,r.id
+        """,
+        fetch=True,
+    )
+
+
+def _render_production_requests_expander():
+    """Render production-to-warehouse requests above the warehouse content."""
+    requests = _get_production_requests_open()
+    if requests.empty:
+        return
+
+    st.markdown('---')
+    with st.expander('Заказ с производства', expanded=False):
+        st.subheader('Заказать материалы для производства')
+
+        view = requests[[
+            'request_id','client_name','object_name','item_name','material_name',
+            'unit_name','quantity_requested','quantity_supplied',
+            'quantity_ordered','quantity_received'
+        ]].copy()
+        view['quantity_to_produce'] = (
+            pd.to_numeric(view['quantity_requested'], errors='coerce').fillna(0)
+            - pd.to_numeric(view['quantity_supplied'], errors='coerce').fillna(0)
+        ).clip(lower=0)
+        view['outstanding_order'] = (
+            pd.to_numeric(view['quantity_ordered'], errors='coerce').fillna(0)
+            - pd.to_numeric(view['quantity_received'], errors='coerce').fillna(0)
+        ).clip(lower=0)
+        view['Заказать'] = 0.0
+        view = view.rename(columns={
+            'request_id':'Заявка ID',
+            'client_name':'Заказчик',
+            'object_name':'Объект',
+            'item_name':'Изделие',
+            'material_name':'Материал',
+            'unit_name':'Единица',
+            'quantity_to_produce':'Требуется производству',
+            'quantity_supplied':'Уже передано',
+            'quantity_ordered':'Заказано у поставщика',
+            'quantity_received':'Получено на склад',
+            'outstanding_order':'Ожидается',
+        })
+        first_cols = [
+            'Заявка ID','Заказчик','Объект','Изделие','Материал','Единица',
+            'Требуется производству','Уже передано','Заказано у поставщика',
+            'Получено на склад','Ожидается','Заказать'
+        ]
+        view = view[first_cols]
+
+        with st.form('production_request_purchase_form', clear_on_submit=False):
+            edited = st.data_editor(
+                view,
+                key='production_request_purchase_editor',
+                width='stretch',
+                hide_index=True,
+                column_config={
+                    'Заявка ID': st.column_config.NumberColumn('Заявка ID', disabled=True),
+                    'Заказчик': st.column_config.TextColumn('Заказчик', disabled=True),
+                    'Объект': st.column_config.TextColumn('Объект', disabled=True),
+                    'Изделие': st.column_config.TextColumn('Изделие', disabled=True),
+                    'Материал': st.column_config.TextColumn('Материал', disabled=True),
+                    'Единица': st.column_config.TextColumn('Единица', disabled=True),
+                    'Требуется производству': st.column_config.NumberColumn('Требуется производству', disabled=True, format='%.2f'),
+                    'Уже передано': st.column_config.NumberColumn('Уже передано', disabled=True, format='%.2f'),
+                    'Заказано у поставщика': st.column_config.NumberColumn('Заказано у поставщика', disabled=True, format='%.2f'),
+                    'Получено на склад': st.column_config.NumberColumn('Получено на склад', disabled=True, format='%.2f'),
+                    'Ожидается': st.column_config.NumberColumn('Ожидается', disabled=True, format='%.2f'),
+                    'Заказать': st.column_config.NumberColumn('Заказать', min_value=0.0, step=0.01, format='%.2f'),
+                },
+                disabled=[
+                    'Заявка ID','Заказчик','Объект','Изделие','Материал','Единица',
+                    'Требуется производству','Уже передано','Заказано у поставщика',
+                    'Получено на склад','Ожидается'
+                ],
+            )
+            execute = st.form_submit_button('Выполнить', use_container_width=True)
+
+        pending_key = 'pending_production_purchase_order'
+        if execute:
+            lines = []
+            errors = []
+            for idx, row in edited.iterrows():
+                qty = safe_float(row['Заказать'])
+                if qty <= 1e-9:
+                    continue
+                raw = requests.loc[int(idx)]
+                request_id = safe_int(raw['request_id'])
+                material_id = safe_int(raw['material_id'])
+                material_name = str(raw['material_name'])
+                supplier_df = run_query(
+                    """
+                    SELECT ms.supplier_id, ms.purchase_price, s.name AS supplier_name
+                    FROM reklet.material_suppliers ms
+                    JOIN reklet.suppliers s ON s.id=ms.supplier_id
+                    WHERE ms.material_id=%s
+                    ORDER BY ms.is_preferred DESC, ms.id
+                    LIMIT 1
+                    """,
+                    (material_id,),
+                    fetch=True,
+                )
+                if supplier_df.empty:
+                    price_df = run_query(
+                        'SELECT COALESCE(cost_per_unit,0) AS cost_per_unit FROM reklet.materials WHERE id=%s',
+                        (material_id,), fetch=True,
+                    )
+                    supplier_name = 'ООО «Поставщик»'
+                    supplier_id = None
+                    unit_price = safe_float(price_df.iloc[0]['cost_per_unit']) if not price_df.empty else 0.0
+                else:
+                    supplier_id = safe_int(supplier_df.iloc[0]['supplier_id'])
+                    supplier_name = str(supplier_df.iloc[0]['supplier_name'])
+                    unit_price = safe_float(supplier_df.iloc[0]['purchase_price'])
+                lines.append({
+                    'request_id': request_id,
+                    'material_id': material_id,
+                    'material_name': material_name,
+                    'supplier_id': supplier_id,
+                    'supplier_name': supplier_name,
+                    'quantity': qty,
+                    'unit_price': unit_price,
+                })
+            if not lines:
+                st.warning('Укажите количество для заказа хотя бы по одной позиции.')
+            else:
+                st.session_state[pending_key] = lines
+
+        pending = st.session_state.get(pending_key)
+        if pending:
+            st.markdown('---')
+            st.subheader('Подтвердить заказ материалов')
+            preview = pd.DataFrame(pending)[[
+                'material_name','supplier_name','quantity','unit_price'
+            ]].copy()
+            preview.columns = ['Материал','Поставщик','Количество','Цена']
+            st.dataframe(preview, width='stretch', hide_index=True)
+            c1, c2 = st.columns(2)
+            with c1:
+                confirm = st.button('Подтвердить заказ', key='confirm_production_purchase_order', type='primary', use_container_width=True)
+            with c2:
+                cancel = st.button('Отмена', key='cancel_production_purchase_order', use_container_width=True)
+            if cancel:
+                st.session_state.pop(pending_key, None)
+                st.rerun()
+            if confirm:
+                grouped = {}
+                for line in pending:
+                    grouped.setdefault(line['supplier_id'], []).append(line)
+                statements = []
+                for sid, lines in grouped.items():
+                    if sid is None:
+                        for line in lines:
+                            statements.append((
+                                """
+                                WITH existing_supplier AS (
+                                    SELECT id FROM reklet.suppliers WHERE name=%s ORDER BY id LIMIT 1
+                                ), created_supplier AS (
+                                    INSERT INTO reklet.suppliers(name,type,category,conditions)
+                                    SELECT %s,'material_supplier','Служебный','Условный поставщик для заказов производства'
+                                    WHERE NOT EXISTS (SELECT 1 FROM existing_supplier)
+                                    RETURNING id
+                                ), supplier AS (
+                                    SELECT id FROM existing_supplier
+                                    UNION ALL SELECT id FROM created_supplier
+                                    LIMIT 1
+                                ), new_po AS (
+                                    INSERT INTO reklet.purchase_orders(supplier_id,status,notes)
+                                    SELECT id,'ordered','Заказ материалов по заявке производства' FROM supplier
+                                    RETURNING id
+                                )
+                                INSERT INTO reklet.purchase_order_items(
+                                    purchase_order_id,object_id,material_id,quantity_ordered,quantity_received,unit_price,production_request_id
+                                )
+                                SELECT id,NULL,%s,%s,0,%s,%s FROM new_po
+                                """,
+                                ('ООО «Поставщик»','ООО «Поставщик»',line['material_id'],line['quantity'],line['unit_price'],line['request_id'])
+                            ))
+                            statements.append((
+                                "UPDATE reklet.material_production_requests SET status='purchasing',updated_at=timezone('utc'::text,now()) WHERE id=%s",
+                                (line['request_id'],),
+                            ))
+                    else:
+                        for line in lines:
+                            statements.append((
+                                """
+                                WITH new_po AS (
+                                    INSERT INTO reklet.purchase_orders(supplier_id,status,notes)
+                                    VALUES (%s,'ordered','Заказ материалов по заявке производства')
+                                    RETURNING id
+                                )
+                                INSERT INTO reklet.purchase_order_items(
+                                    purchase_order_id,object_id,material_id,quantity_ordered,quantity_received,unit_price,production_request_id
+                                )
+                                SELECT id,NULL,%s,%s,0,%s,%s FROM new_po
+                                """,
+                                (sid,line['material_id'],line['quantity'],line['unit_price'],line['request_id'])
+                            ))
+                            statements.append((
+                                "UPDATE reklet.material_production_requests SET status='purchasing',updated_at=timezone('utc'::text,now()) WHERE id=%s",
+                                (line['request_id'],),
+                            ))
+                run_transaction(statements)
+                st.session_state.pop(pending_key, None)
+                st.session_state.pop('production_request_purchase_editor', None)
+                st.success('Заказ материалов для производства создан.')
+                st.rerun()
+
+        st.markdown('---')
+        st.subheader('Выполнить заказ производства')
+        ready = requests.copy()
+        ready['received_total'] = pd.to_numeric(ready['quantity_received'], errors='coerce').fillna(0.0)
+        ready['supplied_total'] = pd.to_numeric(ready['quantity_supplied'], errors='coerce').fillna(0.0)
+        ready['free_received'] = (ready['received_total'] - ready['supplied_total']).clip(lower=0)
+        ready = ready[ready['free_received'] > 1e-9].copy()
+
+        if ready.empty:
+            st.info('Полученных материалов, доступных для передачи в производство, пока нет.')
+        else:
+            second = ready[[
+                'request_id','client_name','object_name','item_name','material_name','unit_name',
+                'quantity_requested','quantity_supplied','free_received'
+            ]].copy()
+            second['Передать в производство'] = 0.0
+            second.columns = [
+                'Заявка ID','Заказчик','Объект','Изделие','Материал','Единица',
+                'Требуется производству','Уже передано','Свободно на складе','Передать в производство'
+            ]
+            with st.form('production_request_issue_form', clear_on_submit=False):
+                issue_edit = st.data_editor(
+                    second,
+                    key='production_request_issue_editor',
+                    width='stretch',
+                    hide_index=True,
+                    column_config={
+                        'Заявка ID': st.column_config.NumberColumn('Заявка ID', disabled=True),
+                        'Заказчик': st.column_config.TextColumn('Заказчик', disabled=True),
+                        'Объект': st.column_config.TextColumn('Объект', disabled=True),
+                        'Изделие': st.column_config.TextColumn('Изделие', disabled=True),
+                        'Материал': st.column_config.TextColumn('Материал', disabled=True),
+                        'Единица': st.column_config.TextColumn('Единица', disabled=True),
+                        'Требуется производству': st.column_config.NumberColumn('Требуется производству', disabled=True, format='%.2f'),
+                        'Уже передано': st.column_config.NumberColumn('Уже передано', disabled=True, format='%.2f'),
+                        'Свободно на складе': st.column_config.NumberColumn('Свободно на складе', disabled=True, format='%.2f'),
+                        'Передать в производство': st.column_config.NumberColumn('Передать в производство', min_value=0.0, step=0.01, format='%.2f'),
+                    },
+                    disabled=['Заявка ID','Заказчик','Объект','Изделие','Материал','Единица','Требуется производству','Уже передано','Свободно на складе'],
+                )
+                execute_issue = st.form_submit_button('Выполнить', use_container_width=True)
+            pending_issue_key = 'pending_production_issue'
+            if execute_issue:
+                issue_lines = []
+                errors = []
+                for idx, row in issue_edit.iterrows():
+                    qty = safe_float(row['Передать в производство'])
+                    if qty <= 1e-9:
+                        continue
+                    raw = ready.loc[int(idx)]
+                    free_qty = safe_float(raw['free_received'])
+                    if qty > free_qty + 1e-9:
+                        errors.append(f"{row['Материал']}: доступно только {free_qty:.2f}.")
+                    else:
+                        issue_lines.append({
+                            'request_id': safe_int(raw['request_id']),
+                            'object_id': safe_int(raw['object_id']),
+                            'material_id': safe_int(raw['material_id']),
+                            'material_name': str(raw['material_name']),
+                            'object_name': str(raw['object_name']),
+                            'requested_remaining': max(safe_float(raw['quantity_requested']) - safe_float(raw['quantity_supplied']),0.0),
+                            'quantity': qty,
+                        })
+                if not issue_lines:
+                    st.warning('Укажите количество для передачи хотя бы по одной заявке.')
+                elif errors:
+                    st.error('Передача не выполнена:\n' + '\n'.join(errors))
+                else:
+                    st.session_state[pending_issue_key] = issue_lines
+
+            pending_issue = st.session_state.get(pending_issue_key)
+            if pending_issue:
+                st.markdown('---')
+                st.subheader('Подтверждение передачи в производство')
+                preview = pd.DataFrame(pending_issue)[[
+                    'material_name','object_name','quantity','requested_remaining'
+                ]].copy()
+                preview.columns = ['Материал','Объект','Передать','Осталось по заявке']
+                st.dataframe(preview, width='stretch', hide_index=True)
+                c1,c2=st.columns(2)
+                with c1:
+                    confirm_issue=st.button('Подтвердить',key='confirm_production_issue',type='primary',use_container_width=True)
+                with c2:
+                    cancel_issue=st.button('Отмена',key='cancel_production_issue',use_container_width=True)
+                if cancel_issue:
+                    st.session_state.pop(pending_issue_key,None)
+                    st.rerun()
+                if confirm_issue:
+                    statements=[]
+                    for line in pending_issue:
+                        to_object=min(line['quantity'], line['requested_remaining'])
+                        excess=max(line['quantity']-to_object,0.0)
+                        if to_object>1e-9:
+                            statements.extend([
+                                (
+                                    "INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')",
+                                    (line['material_id'],line['object_id'],to_object),
+                                ),
+                                (
+                                    "UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",
+                                    (to_object,line['material_id']),
+                                ),
+                            ])
+                        if excess>1e-9:
+                            statements.extend([
+                                (
+                                    "INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,NULL,'production_transfer',%s,'OUT')",
+                                    (line['material_id'],excess),
+                                ),
+                                (
+                                    "UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",
+                                    (excess,line['material_id']),
+                                ),
+                            ])
+                        new_supplied = line['requested_remaining'] if to_object >= line['requested_remaining'] else None
+                        if new_supplied is not None:
+                            statements.append((
+                                "UPDATE reklet.material_production_requests SET quantity_supplied=quantity_requested,status='completed',updated_at=timezone('utc'::text,now()) WHERE id=%s",
+                                (line['request_id'],),
+                            ))
+                        else:
+                            statements.append((
+                                "UPDATE reklet.material_production_requests SET quantity_supplied=LEAST(quantity_requested,quantity_supplied+%s),status='ready',updated_at=timezone('utc'::text,now()) WHERE id=%s",
+                                (to_object,line['request_id']),
+                            ))
+                    run_transaction(statements)
+                    st.session_state.pop(pending_issue_key,None)
+                    st.session_state.pop('production_request_issue_editor',None)
+                    st.success('Материалы переданы в производство. Излишки учтены отдельно.')
+                    st.rerun()
+
 def render_warehouse():
 
+    ensure_task_three_tables()
     st.header("Склад материалов")
+
+    # Заявки производства показываются выше всего содержимого склада.
+    # Сам блок отсутствует, когда активных заявок нет.
+    _render_production_requests_expander()
 
     # Только шесть актуальных разделов. Смена раздела выполняется через
     # callback, поэтому нет промежуточного рендера старого набора кнопок.
-    material_sections = [
+    material_sections = (
         ("Перечень материалов", "list"),
         ("Потребность материалов", "planning"),
         ("Закупка материалов", "purchase"),
         ("Приход материалов", "receipt"),
         ("Выдача материалов в производство", "issue"),
         ("Движение материалов", "movement"),
-    ]
+    )
 
     valid_material_sections = {value for _, value in material_sections}
     if st.session_state.get("warehouse_section") not in valid_material_sections:
@@ -845,26 +1280,131 @@ def render_warehouse():
 
     elif active_material_section=="receipt":
         st.subheader("Приход материалов")
-        openp=run_query("""SELECT poi.id AS purchase_item_id,po.id AS purchase_order_id,s.id AS supplier_id,s.name AS supplier_name,o.id AS object_id,o.object_name,c.name AS client_name,m.id AS material_id,m.name AS material_name,u.name AS unit_name,poi.quantity_ordered,poi.quantity_received,GREATEST(poi.quantity_ordered-poi.quantity_received,0) AS remaining_quantity,poi.unit_price FROM reklet.purchase_order_items poi JOIN reklet.purchase_orders po ON po.id=poi.purchase_order_id JOIN reklet.suppliers s ON s.id=po.supplier_id JOIN reklet.objects o ON o.id=poi.object_id LEFT JOIN reklet.clients c ON c.id=o.client_id JOIN reklet.materials m ON m.id=poi.material_id LEFT JOIN reklet.units u ON u.id=m.unit_id WHERE po.status<>'cancelled' AND poi.quantity_received<poi.quantity_ordered ORDER BY po.id DESC,o.object_name,m.name LIMIT 500""",fetch=True)
-        if openp.empty: st.info("Ожидающих закупок для прихода нет.")
+        openp=run_query(
+            """
+            SELECT
+                poi.id AS purchase_item_id,
+                po.id AS purchase_order_id,
+                s.id AS supplier_id,
+                s.name AS supplier_name,
+                poi.production_request_id,
+                o.id AS object_id,
+                o.object_name,
+                c.name AS client_name,
+                m.id AS material_id,
+                m.name AS material_name,
+                u.name AS unit_name,
+                poi.quantity_ordered,
+                poi.quantity_received,
+                GREATEST(poi.quantity_ordered-poi.quantity_received,0) AS remaining_quantity,
+                poi.unit_price
+            FROM reklet.purchase_order_items poi
+            JOIN reklet.purchase_orders po ON po.id=poi.purchase_order_id
+            JOIN reklet.suppliers s ON s.id=po.supplier_id
+            LEFT JOIN reklet.objects o ON o.id=poi.object_id
+            LEFT JOIN reklet.clients c ON c.id=o.client_id
+            JOIN reklet.materials m ON m.id=poi.material_id
+            LEFT JOIN reklet.units u ON u.id=m.unit_id
+            WHERE po.status<>'cancelled'
+              AND poi.quantity_received<poi.quantity_ordered
+            ORDER BY po.id DESC,COALESCE(o.object_name,'Общий склад'),m.name
+            LIMIT 500
+            """,
+            fetch=True,
+        )
+        if openp.empty:
+            st.info("Ожидающих закупок для прихода нет.")
         else:
-            edf=openp[["purchase_item_id","purchase_order_id","supplier_name","client_name","object_name","material_name","unit_name","quantity_ordered","quantity_received","remaining_quantity","unit_price"]].copy(); edf.insert(0,"Выбрать",False); edf["Принять"]=0.0; edf.columns=["Выбрать","ID позиции","№ закупки","Поставщик","Заказчик","Объект","Материал","Единица","Заказано","Получено","Осталось","Цена","Принять"]
+            edf=openp[[
+                "purchase_item_id","purchase_order_id","supplier_name","client_name","object_name",
+                "material_name","unit_name","quantity_ordered","quantity_received","remaining_quantity","unit_price","production_request_id"
+            ]].copy()
+            edf["object_name"]=edf["object_name"].fillna("Общий склад")
+            edf.insert(0,"Выбрать",False)
+            edf["Принять"]=0.0
+            edf.columns=[
+                "Выбрать","ID позиции","№ закупки","Поставщик","Заказчик","Объект",\
+                "Материал","Единица","Заказано","Получено","Осталось","Цена","Заявка производства","Принять"
+            ]
             with st.form("purchase_receipt_form",clear_on_submit=False):
-                edited=st.data_editor(edf,key="purchase_receipt_editor",width="stretch",hide_index=True,column_config={"Выбрать":st.column_config.CheckboxColumn("Выбрать"),"ID позиции":st.column_config.NumberColumn("ID позиции",disabled=True),"№ закупки":st.column_config.NumberColumn("№ закупки",disabled=True),"Поставщик":st.column_config.TextColumn("Поставщик",disabled=True),"Заказчик":st.column_config.TextColumn("Заказчик",disabled=True),"Объект":st.column_config.TextColumn("Объект",disabled=True),"Материал":st.column_config.TextColumn("Материал",disabled=True),"Единица":st.column_config.TextColumn("Единица",disabled=True),"Заказано":st.column_config.NumberColumn("Заказано",disabled=True,format="%.4f"),"Получено":st.column_config.NumberColumn("Получено",disabled=True,format="%.4f"),"Осталось":st.column_config.NumberColumn("Осталось",disabled=True,format="%.4f"),"Цена":st.column_config.NumberColumn("Цена",disabled=True,format="%.2f"),"Принять":st.column_config.NumberColumn("Принять",min_value=0.0,step=0.001,format="%.4f")},disabled=["ID позиции","№ закупки","Поставщик","Заказчик","Объект","Материал","Единица","Заказано","Получено","Осталось","Цена"])
+                edited=st.data_editor(
+                    edf,
+                    key="purchase_receipt_editor",
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "Выбрать":st.column_config.CheckboxColumn("Выбрать"),
+                        "ID позиции":st.column_config.NumberColumn("ID позиции",disabled=True),
+                        "№ закупки":st.column_config.NumberColumn("№ закупки",disabled=True),
+                        "Поставщик":st.column_config.TextColumn("Поставщик",disabled=True),
+                        "Заказчик":st.column_config.TextColumn("Заказчик",disabled=True),
+                        "Объект":st.column_config.TextColumn("Объект",disabled=True),
+                        "Материал":st.column_config.TextColumn("Материал",disabled=True),
+                        "Единица":st.column_config.TextColumn("Единица",disabled=True),
+                        "Заказано":st.column_config.NumberColumn("Заказано",disabled=True,format="%.2f"),
+                        "Получено":st.column_config.NumberColumn("Получено",disabled=True,format="%.2f"),
+                        "Осталось":st.column_config.NumberColumn("Осталось",disabled=True,format="%.2f"),
+                        "Цена":st.column_config.NumberColumn("Цена",disabled=True,format="%.2f"),
+                        "Заявка производства":st.column_config.NumberColumn("Заявка производства",disabled=True),
+                        "Принять":st.column_config.NumberColumn("Принять",min_value=0.0,step=0.01,format="%.2f"),
+                    },
+                    disabled=[
+                        "ID позиции","№ закупки","Поставщик","Заказчик","Объект","Материал","Единица",
+                        "Заказано","Получено","Осталось","Цена","Заявка производства"
+                    ],
+                )
                 execute=st.form_submit_button("Оформить приход",use_container_width=True)
             if execute:
-                selected=edited[edited["Выбрать"].fillna(False)&(edited["Принять"].fillna(0)>0)].copy(); errors=[]; statements=[]; groups={}
+                selected=edited[edited["Выбрать"].fillna(False)&(pd.to_numeric(edited["Принять"],errors="coerce").fillna(0)>0)].copy()
+                errors=[]; statements=[]
                 for idx,row in selected.iterrows():
-                    qty=safe_float(row["Принять"]); rem=safe_float(row["Осталось"]); raw=openp.loc[int(idx)];
-                    if qty>rem+1e-9: errors.append(f"{row['Материал']} / закупка №{safe_int(row['№ закупки'])}: можно принять максимум {rem:.4f}.")
-                    key=(safe_int(raw["object_id"]),safe_int(raw["material_id"])); groups[key]=groups.get(key,0)+qty
-                for idx,row in selected.iterrows():
-                    raw=openp.loc[int(idx)]; qty=safe_float(row["Принять"])
-                    statements.extend([("INSERT INTO reklet.material_transactions(material_id,supplier_id,object_id,operation_type,quantity,unit_price,transaction_type) VALUES (%s,%s,%s,'purchase',%s,%s,'IN')",(safe_int(raw["material_id"]),safe_int(raw["supplier_id"]),safe_int(raw["object_id"]),qty,safe_float(raw["unit_price"]))),("UPDATE reklet.purchase_order_items SET quantity_received=quantity_received+%s WHERE id=%s",(qty,safe_int(raw["purchase_item_id"]))),("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)+%s WHERE id=%s",(qty,safe_int(raw["material_id"])))])
-                for po_id in sorted({safe_int(openp.loc[int(i),"purchase_order_id"]) for i in selected.index}): statements.append(("""UPDATE reklet.purchase_orders po SET status=CASE WHEN NOT EXISTS(SELECT 1 FROM reklet.purchase_order_items poi WHERE poi.purchase_order_id=po.id AND poi.quantity_received<poi.quantity_ordered) THEN 'received' WHEN EXISTS(SELECT 1 FROM reklet.purchase_order_items poi WHERE poi.purchase_order_id=po.id AND poi.quantity_received>0) THEN 'partial' ELSE 'ordered' END WHERE po.id=%s""",(po_id,)))
-                if selected.empty: st.warning("Выберите позиции и укажите количество принятого материала.")
-                elif errors: st.error("Приход не выполнен:\n"+"\n".join(errors))
-                else: run_transaction(statements); st.success("Приход оформлен. Материал добавлен на общий склад."); st.session_state.pop("purchase_receipt_editor",None); st.rerun()
+                    raw=openp.loc[int(idx)]
+                    qty=safe_float(row["Принять"]); rem=safe_float(row["Осталось"])
+                    if qty>rem+1e-9:
+                        errors.append(f"{row['Материал']} / закупка №{safe_int(row['№ закупки'])}: можно принять максимум {rem:.2f}.")
+                        continue
+                    statements.extend([
+                        (
+                            "INSERT INTO reklet.material_transactions(material_id,supplier_id,object_id,operation_type,quantity,unit_price,transaction_type) VALUES (%s,%s,%s,'purchase',%s,%s,'IN')",
+                            (safe_int(raw["material_id"]),safe_int(raw["supplier_id"]),safe_int(raw["object_id"]) if pd.notna(raw["object_id"]) else None,qty,safe_float(raw["unit_price"])),
+                        ),
+                        ("UPDATE reklet.purchase_order_items SET quantity_received=quantity_received+%s WHERE id=%s",(qty,safe_int(raw["purchase_item_id"]))),
+                        ("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)+%s WHERE id=%s",(qty,safe_int(raw["material_id"]))),
+                    ])
+                    req_id=safe_int(raw["production_request_id"]) if pd.notna(raw["production_request_id"]) else None
+                    if req_id:
+                        statements.append((
+                            "UPDATE reklet.material_production_requests SET status='ready',updated_at=timezone('utc'::text,now()) WHERE id=%s AND status IN ('sent','purchasing','ready')",
+                            (req_id,),
+                        ))
+                for po_id in sorted({safe_int(openp.loc[int(i),"purchase_order_id"]) for i in selected.index}):
+                    statements.append((
+                        """
+                        UPDATE reklet.purchase_orders po
+                        SET status=CASE
+                            WHEN NOT EXISTS(
+                                SELECT 1 FROM reklet.purchase_order_items poi
+                                WHERE poi.purchase_order_id=po.id AND poi.quantity_received<poi.quantity_ordered
+                            ) THEN 'received'
+                            WHEN EXISTS(
+                                SELECT 1 FROM reklet.purchase_order_items poi
+                                WHERE poi.purchase_order_id=po.id AND poi.quantity_received>0
+                            ) THEN 'partial'
+                            ELSE 'ordered'
+                        END
+                        WHERE po.id=%s
+                        """,
+                        (po_id,),
+                    ))
+                if selected.empty:
+                    st.warning("Выберите позиции и укажите количество принятого материала.")
+                elif errors:
+                    st.error("Приход не выполнен:\n"+"\n".join(errors))
+                else:
+                    run_transaction(statements)
+                    st.success("Приход оформлен. Материал добавлен на общий склад.")
+                    st.session_state.pop("purchase_receipt_editor",None)
+                    st.rerun()
 
         st.markdown("---")
         with st.expander("Приход без предварительной закупки"):
@@ -874,13 +1414,10 @@ def render_warehouse():
             elif cat!="Все категории": manual=manual[manual["category_name"].fillna("").astype(str).eq(cat)].copy()
             mdf=manual[["id","name","unit_name"]].copy(); mdf.insert(0,"Выбрать",False); mdf["Количество"]=0.0; mdf["Цена"]=0.0; mdf.columns=["Выбрать","ID","Материал","Единица","Количество","Цена"]
             default_supplier_name="ООО «Поставщик»"
-            if default_supplier_name not in smap:
-                supplier_options=[default_supplier_name]+list(smap.keys())
-            else:
-                supplier_options=list(smap.keys())
+            supplier_options=[default_supplier_name]+list(smap.keys()) if default_supplier_name not in smap else list(smap.keys())
             supplier=st.selectbox("Поставщик",supplier_options,key="manual_receipt_supplier")
             with st.form("manual_receipt_form",clear_on_submit=False):
-                edited=st.data_editor(mdf,key="manual_receipt_editor",width="stretch",hide_index=True,column_config={"Выбрать":st.column_config.CheckboxColumn("Выбрать"),"ID":st.column_config.NumberColumn("ID",disabled=True),"Материал":st.column_config.TextColumn("Материал",disabled=True),"Единица":st.column_config.TextColumn("Единица",disabled=True),"Количество":st.column_config.NumberColumn("Количество",min_value=0.0,step=0.001,format="%.4f"),"Цена":st.column_config.NumberColumn("Цена",min_value=0.0,step=0.01,format="%.2f")},disabled=["ID","Материал","Единица"])
+                edited=st.data_editor(mdf,key="manual_receipt_editor",width="stretch",hide_index=True,column_config={"Выбрать":st.column_config.CheckboxColumn("Выбрать"),"ID":st.column_config.NumberColumn("ID",disabled=True),"Материал":st.column_config.TextColumn("Материал",disabled=True),"Единица":st.column_config.TextColumn("Единица",disabled=True),"Количество":st.column_config.NumberColumn("Количество",min_value=0.0,step=0.01,format="%.2f"),"Цена":st.column_config.NumberColumn("Цена",min_value=0.0,step=0.01,format="%.2f")},disabled=["ID","Материал","Единица"])
                 execute=st.form_submit_button("Выполнить приход",use_container_width=True)
             if execute:
                 sel=edited[edited["Выбрать"].fillna(False)&(edited["Количество"].fillna(0)>0)].copy()
@@ -890,24 +1427,30 @@ def render_warehouse():
                     if sid is None and supplier==default_supplier_name:
                         existing_default=run_query("SELECT id FROM reklet.suppliers WHERE name=%s ORDER BY id LIMIT 1",(default_supplier_name,),fetch=True)
                         if existing_default.empty:
-                            created_default=run_query(
-                                """INSERT INTO reklet.suppliers(name,type,category,conditions) VALUES (%s,'material_supplier','Служебный','Условный поставщик по умолчанию') RETURNING id""",
-                                (default_supplier_name,),fetch=True
-                            )
+                            created_default=run_query("""INSERT INTO reklet.suppliers(name,type,category,conditions) VALUES (%s,'material_supplier','Служебный','Условный поставщик по умолчанию') RETURNING id""",(default_supplier_name,),fetch=True)
                             sid=safe_int(created_default.iloc[0]["id"])
-                        else:
-                            sid=safe_int(existing_default.iloc[0]["id"])
+                        else: sid=safe_int(existing_default.iloc[0]["id"])
                     statements=[]
                     for _,row in sel.iterrows():
-                        mid=safe_int(row["ID"]); qty=safe_float(row["Количество"]); price=safe_float(row["Цена"]); statements.extend([("INSERT INTO reklet.material_transactions(material_id,supplier_id,operation_type,quantity,unit_price,transaction_type) VALUES (%s,%s,'purchase',%s,%s,'IN')",(mid,sid,qty,price)),("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)+%s WHERE id=%s",(qty,mid))]);
-                        if sid: statements.append(("INSERT INTO reklet.material_suppliers(material_id,supplier_id,purchase_price) VALUES (%s,%s,%s) ON CONFLICT(material_id,supplier_id) DO UPDATE SET purchase_price=EXCLUDED.purchase_price",(mid,sid,price)))
+                        mid=safe_int(row["ID"]); qty=safe_float(row["Количество"]); price=safe_float(row["Цена"])
+                        statements.extend([
+                            ("INSERT INTO reklet.material_transactions(material_id,supplier_id,operation_type,quantity,unit_price,transaction_type) VALUES (%s,%s,'purchase',%s,%s,'IN')",(mid,sid,qty,price)),
+                            ("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)+%s WHERE id=%s",(qty,mid)),
+                            ("INSERT INTO reklet.material_suppliers(material_id,supplier_id,purchase_price) VALUES (%s,%s,%s) ON CONFLICT(material_id,supplier_id) DO UPDATE SET purchase_price=EXCLUDED.purchase_price",(mid,sid,price)),
+                        ])
                     run_transaction(statements); st.success(f"Приход выполнен: {len(sel)} поз."); st.session_state.pop("manual_receipt_editor",None); st.rerun()
-        history=run_query("""SELECT mt.created_at AS \"Дата\",s.name AS \"Поставщик\",o.object_name AS \"Объект\",m.name AS \"Материал\",u.name AS \"Единица\",mt.quantity AS \"Количество\",mt.unit_price AS \"Цена\",mt.quantity*COALESCE(mt.unit_price,0) AS \"Сумма\" FROM reklet.material_transactions mt LEFT JOIN reklet.suppliers s ON s.id=mt.supplier_id LEFT JOIN reklet.objects o ON o.id=mt.object_id JOIN reklet.materials m ON m.id=mt.material_id LEFT JOIN reklet.units u ON u.id=m.unit_id WHERE mt.operation_type='purchase' AND mt.transaction_type='IN' ORDER BY mt.created_at DESC LIMIT 500""",fetch=True); st.markdown("---"); st.subheader("История прихода материалов")
-        if not history.empty: st.dataframe(history,width="stretch",hide_index=True); render_print_html("Ведомость прихода материалов",history,"print_material_receipt_history")
+        history=run_query("""SELECT mt.created_at AS \"Дата\",s.name AS \"Поставщик\",o.object_name AS \"Объект\",m.name AS \"Материал\",u.name AS \"Единица\",mt.quantity AS \"Количество\",mt.unit_price AS \"Цена\",mt.quantity*COALESCE(mt.unit_price,0) AS \"Сумма\" FROM reklet.material_transactions mt LEFT JOIN reklet.suppliers s ON s.id=mt.supplier_id LEFT JOIN reklet.objects o ON o.id=mt.object_id JOIN reklet.materials m ON m.id=mt.material_id LEFT JOIN reklet.units u ON u.id=m.unit_id WHERE mt.operation_type='purchase' AND mt.transaction_type='IN' ORDER BY mt.created_at DESC LIMIT 500""",fetch=True)
+        st.markdown("---")
+        st.subheader("История прихода материалов")
+        if not history.empty:
+            st.dataframe(history,width="stretch",hide_index=True)
+            render_print_html("Ведомость прихода материалов",history,"print_material_receipt_history")
 
     elif active_material_section=="issue":
         st.subheader("Выдача материалов в производство")
         object_id,object_row=warehouse_select_object("material_issue")
+        excess_map=_get_production_excess_map()
+
         if object_id is not None:
             planning=get_object_material_planning(object_id)
             if planning.empty:
@@ -919,72 +1462,160 @@ def render_warehouse():
                     key="issue_material_scope"
                 )
                 issue=planning.copy()
+                issue["global_excess"]=issue["material_id"].map(excess_map).fillna(0.0)
+                issue["issue_remaining_need"]=(issue["remaining_need"]-issue["global_excess"]).clip(lower=0)
                 if scope=="Только необходимые для объекта":
-                    issue=issue[issue["remaining_need"]>0].copy()
+                    issue=issue[issue["issue_remaining_need"]>1e-9].copy()
                 if issue.empty:
                     st.info("Материалов для выбранного отбора нет.")
                 else:
                     idf=issue[[
                         "material_id","material_name","unit_name","stock_quantity",
-                        "required_quantity","issued_quantity","remaining_need"
+                        "required_quantity","issued_quantity","issue_remaining_need","global_excess"
                     ]].copy()
                     idf.insert(0,"Выбрать",False)
                     idf["Выдать"]=0.0
                     idf.columns=[
                         "Выбрать","ID","Материал","Единица","На складе",
-                        "Потребность объекта","Выдано","Осталось потребно","Выдать"
+                        "Потребность объекта","Выдано","Осталось потребно","Излишки на производстве","Выдать"
                     ]
                     with st.form(f"issue_materials_form_{object_id}",clear_on_submit=False):
                         edited=st.data_editor(
-                            idf,
-                            key=f"issue_materials_editor_{object_id}_{scope}",
-                            width="stretch",
-                            hide_index=True,
+                            idf,key=f"issue_materials_editor_{object_id}_{scope}",width="stretch",hide_index=True,
                             column_config={
                                 "Выбрать":st.column_config.CheckboxColumn("Выбрать"),
                                 "ID":st.column_config.NumberColumn("ID",disabled=True),
                                 "Материал":st.column_config.TextColumn("Материал",disabled=True),
                                 "Единица":st.column_config.TextColumn("Единица",disabled=True),
-                                "На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.4f"),
-                                "Потребность объекта":st.column_config.NumberColumn("Потребность объекта",disabled=True,format="%.4f"),
-                                "Выдано":st.column_config.NumberColumn("Выдано",disabled=True,format="%.4f"),
-                                "Осталось потребно":st.column_config.NumberColumn("Осталось потребно",disabled=True,format="%.4f"),
-                                "Выдать":st.column_config.NumberColumn("Выдать",min_value=0.0,step=0.001,format="%.4f")
+                                "На складе":st.column_config.NumberColumn("На складе",disabled=True,format="%.2f"),
+                                "Потребность объекта":st.column_config.NumberColumn("Потребность объекта",disabled=True,format="%.2f"),
+                                "Выдано":st.column_config.NumberColumn("Выдано",disabled=True,format="%.2f"),
+                                "Осталось потребно":st.column_config.NumberColumn("Осталось потребно",disabled=True,format="%.2f"),
+                                "Излишки на производстве":st.column_config.NumberColumn("Излишки на производстве",disabled=True,format="%.2f"),
+                                "Выдать":st.column_config.NumberColumn("Выдать",min_value=0.0,step=0.01,format="%.2f")
                             },
-                            disabled=["ID","Материал","Единица","На складе","Потребность объекта","Выдано","Осталось потребно"]
+                            disabled=["ID","Материал","Единица","На складе","Потребность объекта","Выдано","Осталось потребно","Излишки на производстве"]
                         )
                         execute=st.form_submit_button("Выполнить выдачу в производство",use_container_width=True)
                     if execute:
-                        selected=edited[edited["Выбрать"].fillna(False)&(edited["Выдать"].fillna(0)>0)].copy()
+                        selected=edited[edited["Выбрать"].fillna(False)&(pd.to_numeric(edited["Выдать"],errors="coerce").fillna(0)>0)].copy()
                         errors=[]; statements=[]
                         for _,row in selected.iterrows():
-                            mid=safe_int(row["ID"]); qty=safe_float(row["Выдать"]); stock=safe_float(row["На складе"]); remaining=safe_float(row["Осталось потребно"])
+                            mid=safe_int(row["ID"]); qty=safe_float(row["Выдать"]); stock=safe_float(row["На складе"]); need=safe_float(row["Осталось потребно"])
                             if qty>stock+1e-9:
-                                errors.append(f"{row['Материал']}: на складе только {stock:.4f}.")
-                            if qty>remaining+1e-9:
-                                errors.append(f"{row['Материал']}: требуется ещё только {remaining:.4f}.")
-                            if qty>0 and qty<=min(stock,remaining)+1e-9:
+                                errors.append(f"{row['Материал']}: на складе только {stock:.2f}.")
+                            to_object=min(max(need,0.0),qty)
+                            excess=max(qty-to_object,0.0)
+                            if qty>stock+1e-9:
+                                continue
+                            if to_object>1e-9:
                                 statements.extend([
-                                    (
-                                        "INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')",
-                                        (mid,object_id,qty)
-                                    ),
-                                    (
-                                        "UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",
-                                        (qty,mid)
-                                    )
+                                    ("INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,%s,'production_transfer',%s,'OUT')",(mid,object_id,to_object)),
+                                    ("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",(to_object,mid)),
+                                ])
+                            if excess>1e-9:
+                                statements.extend([
+                                    ("INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,transaction_type) VALUES (%s,NULL,'production_transfer',%s,'OUT')",(mid,excess)),
+                                    ("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)-%s WHERE id=%s",(excess,mid)),
                                 ])
                         if selected.empty:
                             st.warning("Выберите материалы и укажите количество.")
                         elif errors:
                             st.error("Выдача не выполнена:\n"+"\n".join(errors))
-                        elif not statements:
-                            st.info("Нет допустимых изменений.")
-                        else:
+                        elif statements:
                             run_transaction(statements)
-                            st.success("Материалы выданы в производство.")
+                            st.success("Материалы выданы в производство. Излишки учтены отдельно.")
                             st.session_state.pop(f"issue_materials_editor_{object_id}_{scope}",None)
                             st.rerun()
+                        else:
+                            st.info("Нет допустимых изменений.")
+
+        # ------------------------------------------------------------
+        # ИЗЛИШКИ НА ПРОИЗВОДСТВЕ — ОБЩИЙ ОСТАТОК
+        # ------------------------------------------------------------
+        excess_rows=run_query(
+            """
+            SELECT
+                m.id AS material_id,m.name AS material_name,u.name AS unit_name,
+                GREATEST(
+                    COALESCE((SELECT SUM(mt.quantity) FROM reklet.material_transactions mt WHERE mt.material_id=m.id AND mt.object_id IS NULL AND mt.operation_type='production_transfer' AND mt.transaction_type='OUT'),0)
+                    - COALESCE((SELECT SUM(mt.quantity) FROM reklet.material_transactions mt WHERE mt.material_id=m.id AND mt.operation_type='production_allocation' AND mt.transaction_type='IN'),0)
+                    - COALESCE((SELECT SUM(mt.quantity) FROM reklet.material_transactions mt WHERE mt.material_id=m.id AND mt.object_id IS NULL AND mt.operation_type='production_return' AND mt.transaction_type='IN'),0)
+                    - COALESCE((SELECT SUM(mw.quantity) FROM reklet.material_waste_transactions mw WHERE mw.material_id=m.id AND mw.object_id IS NULL AND mw.source_type='production'),0),0
+                ) AS excess_quantity
+            FROM reklet.materials m
+            LEFT JOIN reklet.units u ON u.id=m.unit_id
+            ORDER BY m.name
+            """,fetch=True
+        )
+        excess_rows["excess_quantity"]=pd.to_numeric(excess_rows["excess_quantity"],errors="coerce").fillna(0.0) if not excess_rows.empty else pd.Series(dtype=float)
+        excess_rows=excess_rows[excess_rows["excess_quantity"]>1e-9].copy() if not excess_rows.empty else excess_rows
+        st.markdown("---")
+        st.subheader("Излишки на производстве")
+        if excess_rows.empty:
+            st.info("Излишков на производстве нет.")
+        else:
+            excess_editor=excess_rows[["material_id","material_name","unit_name","excess_quantity"]].copy()
+            excess_editor.insert(0,"Выбрать",False)
+            excess_editor["Вернуть количество"]=0.0
+            excess_editor.columns=["Выбрать","ID","Материал","Единица","Излишки всего","Вернуть количество"]
+            with st.form("production_excess_return_form",clear_on_submit=False):
+                edited_excess=st.data_editor(
+                    excess_editor,key="production_excess_return_editor",width="stretch",hide_index=True,
+                    column_config={
+                        "Выбрать":st.column_config.CheckboxColumn("Выбрать"),
+                        "ID":st.column_config.NumberColumn("ID",disabled=True),
+                        "Материал":st.column_config.TextColumn("Материал",disabled=True),
+                        "Единица":st.column_config.TextColumn("Единица",disabled=True),
+                        "Излишки всего":st.column_config.NumberColumn("Излишки всего",disabled=True,format="%.2f"),
+                        "Вернуть количество":st.column_config.NumberColumn("Вернуть количество",min_value=0.0,step=0.01,format="%.2f")
+                    },
+                    disabled=["ID","Материал","Единица","Излишки всего"]
+                )
+                request_return=st.form_submit_button("Вернуть на склад",use_container_width=True)
+            if request_return:
+                selected_return=edited_excess[edited_excess["Выбрать"].fillna(False)&(pd.to_numeric(edited_excess["Вернуть количество"],errors="coerce").fillna(0)>0)].copy()
+                errors=[]; pending=[]
+                for idx,row in selected_return.iterrows():
+                    raw=excess_rows.iloc[int(idx)]; qty=safe_float(row["Вернуть количество"]); available=safe_float(row["Излишки всего"]);
+                    if qty>available+1e-9:
+                        errors.append(f"{row['Материал']}: вернуть можно максимум {available:.2f}.")
+                    else:
+                        pending.append({"material_id":safe_int(raw["material_id"]),"material_name":str(raw["material_name"]),"unit_name":str(raw["unit_name"] or ''),"quantity":qty})
+                if selected_return.empty:
+                    st.warning("Выберите материал и укажите количество.")
+                elif errors:
+                    st.error("Возврат не подготовлен:\n"+"\n".join(errors))
+                else:
+                    st.session_state["pending_production_excess_return"]=pending
+            pending=st.session_state.get("pending_production_excess_return")
+            if pending:
+                st.markdown("#### Подтверждение возврата на склад")
+                confirm_df=pd.DataFrame(pending)
+                confirm_df.columns=["ID материала","Материал","Единица","Количество"]
+                st.dataframe(confirm_df,width="stretch",hide_index=True)
+                c1,c2=st.columns(2)
+                with c1:
+                    confirm_return=st.button("Подтвердить",key="confirm_production_excess_return",use_container_width=True)
+                with c2:
+                    cancel_return=st.button("Отмена",key="cancel_production_excess_return",use_container_width=True)
+                if cancel_return:
+                    st.session_state.pop("pending_production_excess_return",None)
+                    st.rerun()
+                if confirm_return:
+                    statements=[]
+                    for line in pending:
+                        price_df=run_query("SELECT COALESCE(cost_per_unit,0) AS cost FROM reklet.materials WHERE id=%s",(line["material_id"],),fetch=True)
+                        price=safe_float(price_df.iloc[0]["cost"]) if not price_df.empty else 0.0
+                        statements.extend([
+                            ("INSERT INTO reklet.material_transactions(material_id,object_id,operation_type,quantity,unit_price,transaction_type) VALUES (%s,NULL,'production_return',%s,%s,'IN')",(line["material_id"],line["quantity"],price)),
+                            ("UPDATE reklet.materials SET stock_quantity=COALESCE(stock_quantity,0)+%s WHERE id=%s",(line["quantity"],line["material_id"]))
+                        ])
+                    run_transaction(statements)
+                    st.session_state.pop("pending_production_excess_return",None)
+                    st.session_state.pop("production_excess_return_editor",None)
+                    st.success("Излишки возвращены на склад.")
+                    st.rerun()
 
     elif active_material_section=="movement":
         ensure_material_planning_tables()
