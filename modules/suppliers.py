@@ -255,11 +255,13 @@ def render_suppliers():
                 if not material_categories.empty else []
             )
 
-            search_category = st.selectbox(
-                "Категория материала",
-                category_options,
-                key="supplier_search_category"
-            )
+            filter_category_col, filter_material_col = st.columns(2, gap="small")
+            with filter_category_col:
+                search_category = st.selectbox(
+                    "Категория материала",
+                    category_options,
+                    key="supplier_search_category"
+                )
 
             filtered_materials = all_materials.copy()
             if search_category == "Без категории":
@@ -279,11 +281,12 @@ def render_suppliers():
                     for _, row in filtered_materials.sort_values("name").iterrows()
                 }
 
-                selected_material = st.selectbox(
-                    "Материал",
-                    list(material_map.keys()),
-                    key="supplier_search_material_new"
-                )
+                with filter_material_col:
+                    selected_material = st.selectbox(
+                        "Материал",
+                        list(material_map.keys()),
+                        key="supplier_search_material_new"
+                    )
                 material_id = material_map[selected_material]
 
                 suppliers_for_material = run_query(

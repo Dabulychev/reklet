@@ -162,11 +162,13 @@ def render_production():
     customer_options=["Все заказчики"] + sorted(
         stage_objects["client_name"].fillna("").astype(str).str.strip().loc[lambda x: x!=""].unique().tolist()
     )
-    selected_customer=st.selectbox(
-        "Заказчик",
-        customer_options,
-        key="production_customer_filter_v5"
-    )
+    filter_customer_col, filter_object_col = st.columns(2, gap="small")
+    with filter_customer_col:
+        selected_customer=st.selectbox(
+            "Заказчик",
+            customer_options,
+            key="production_customer_filter_v5"
+        )
 
     filtered_objects=stage_objects.copy()
     if selected_customer!="Все заказчики":
@@ -178,11 +180,12 @@ def render_production():
         f"{int(r['id'])} — {str(r['object_name']).strip()}"
         for _,r in filtered_objects.iterrows()
     ]
-    selected_object=st.selectbox(
-        "Объект",
-        object_options,
-        key="production_object_table"
-    )
+    with filter_object_col:
+        selected_object=st.selectbox(
+            "Объект",
+            object_options,
+            key="production_object_table"
+        )
 
     if selected_object=="Все объекты":
         overview_query="""

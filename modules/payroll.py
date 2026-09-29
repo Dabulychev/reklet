@@ -57,11 +57,13 @@ def render_payroll():
         st.stop()
 
     customer_options = [f"{int(row['id'])} — {row['name']}" for _, row in customers.iterrows()]
-    selected_customer = st.selectbox(
-        "Заказчик",
-        customer_options,
-        key=f"payroll_customer_filter_{section_key}"
-    )
+    filter_customer_col, filter_object_col = st.columns(2, gap="small")
+    with filter_customer_col:
+        selected_customer = st.selectbox(
+            "Заказчик",
+            customer_options,
+            key=f"payroll_customer_filter_{section_key}"
+        )
     selected_customer_id = int(selected_customer.split(" — ")[0])
 
     objects_for_customer = run_query(
@@ -84,11 +86,12 @@ def render_payroll():
         f"{int(row['id'])} — {row['object_name']}"
         for _, row in objects_for_customer.iterrows()
     ]
-    selected_object = st.selectbox(
-        "Объект",
-        object_options,
-        key=f"payroll_object_filter_{section_key}_{selected_customer_id}"
-    )
+    with filter_object_col:
+        selected_object = st.selectbox(
+            "Объект",
+            object_options,
+            key=f"payroll_object_filter_{section_key}_{selected_customer_id}"
+        )
     selected_object_id = int(selected_object.split(" — ")[0])
 
     st.markdown("---")

@@ -34,12 +34,14 @@ def render_stage_object_filters(stage: str, prefix: str):
     client_options = ["Все заказчики"] + sorted(
         [x for x in stage_objects["client_name"].drop_duplicates().tolist() if x]
     )
-    selected_client = st.selectbox(
-        "Заказчик",
-        client_options,
-        index=0,
-        key=f"{prefix}_customer_filter",
-    )
+    filter_customer_col, filter_object_col = st.columns(2, gap="small")
+    with filter_customer_col:
+        selected_client = st.selectbox(
+            "Заказчик",
+            client_options,
+            index=0,
+            key=f"{prefix}_customer_filter",
+        )
 
     filtered_objects = stage_objects.copy()
     if selected_client != "Все заказчики":
@@ -55,12 +57,13 @@ def render_stage_object_filters(stage: str, prefix: str):
         f"{int(r['id'])} — {r['object_name']} — {r['client_name']}"
         for _, r in filtered_objects.iterrows()
     ]
-    selected_object_label = st.selectbox(
-        "Объект",
-        ["Все объекты"] + object_options,
-        index=0,
-        key=f"{prefix}_object_filter",
-    )
+    with filter_object_col:
+        selected_object_label = st.selectbox(
+            "Объект",
+            ["Все объекты"] + object_options,
+            index=0,
+            key=f"{prefix}_object_filter",
+        )
 
     if selected_object_label == "Все объекты":
         return stage_objects, filtered_objects, selected_client, selected_object_label, None

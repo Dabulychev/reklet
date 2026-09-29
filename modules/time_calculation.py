@@ -175,11 +175,13 @@ def render_time_calculation() -> None:
         .tolist()
     )
 
-    selected_customer = st.selectbox(
-        "Заказчик",
-        customer_names,
-        key="time_calculation_customer",
-    )
+    filter_customer_col, filter_object_col = st.columns(2, gap="small")
+    with filter_customer_col:
+        selected_customer = st.selectbox(
+            "Заказчик",
+            customer_names,
+            key="time_calculation_customer",
+        )
     customer_source = source[
         source["client_name"].fillna("Без заказчика").astype(str).str.strip().replace("", "Без заказчика")
         == selected_customer
@@ -193,11 +195,12 @@ def render_time_calculation() -> None:
         st.info("Для выбранного заказчика нет объектов с количеством изделий.")
         return
 
-    selected_object_label = st.selectbox(
-        "Объект",
-        list(object_options.keys()),
-        key="time_calculation_object",
-    )
+    with filter_object_col:
+        selected_object_label = st.selectbox(
+            "Объект",
+            list(object_options.keys()),
+            key="time_calculation_object",
+        )
     selected_object_id = object_options[selected_object_label]
     selected_rows = customer_source[customer_source["object_id"] == selected_object_id].copy()
     selected_rows = selected_rows[selected_rows["quantity_needed"] > 0].copy()

@@ -23,7 +23,9 @@ def warehouse_select_object(prefix):
         st.info("Объектов нет."); return None,None
     client_rows=clients[["id","name"]].copy(); client_rows["name"]=client_rows["name"].fillna("").astype(str).str.strip(); client_rows=client_rows[client_rows["name"]!=""]
     client_options=[f"{int(r['id'])} — {r['name']}" for _,r in client_rows.iterrows()]
-    selected_client=st.selectbox("Заказчик",["— Выберите заказчика —"]+client_options,key=f"{prefix}_customer")
+    filter_customer_col, filter_object_col = st.columns(2, gap="small")
+    with filter_customer_col:
+        selected_client=st.selectbox("Заказчик",["— Выберите заказчика —"]+client_options,key=f"{prefix}_customer")
     if selected_client=="— Выберите заказчика —":
         st.info("Сначала выберите заказчика."); return None,None
     client_id=int(selected_client.split(" — ")[0])
@@ -31,7 +33,8 @@ def warehouse_select_object(prefix):
     if client_objects.empty:
         st.info("У выбранного заказчика нет объектов."); return None,None
     object_options=[f"{int(r['id'])} — {str(r['object_name'] or '').strip()}" for _,r in client_objects.iterrows()]
-    selected_object=st.selectbox("Объект",["— Выберите объект —"]+object_options,key=f"{prefix}_object_{client_id}")
+    with filter_object_col:
+        selected_object=st.selectbox("Объект",["— Выберите объект —"]+object_options,key=f"{prefix}_object_{client_id}")
     if selected_object=="— Выберите объект —":
         st.info("Теперь выберите объект."); return None,None
     object_id=int(selected_object.split(" — ")[0])
@@ -1490,13 +1493,17 @@ def render_warehouse():
         st.markdown("---")
         with st.expander("Приход без предварительной закупки"):
             suppliers=get_suppliers(); smap={str(r["name"]):int(r["id"]) for _,r in suppliers.iterrows()} if not suppliers.empty else {}
-            cat_options=["Все категории","Без категории"]+(categories["name"].astype(str).tolist() if not categories.empty else []); cat=st.selectbox("Категория материала",cat_options,key="manual_receipt_category"); manual=materials.copy()
+            filter_category_col, filter_supplier_col = st.columns(2, gap="small")
+            with filter_category_col:
+                cat_options=["Все категории","Без категории"]+(categories["name"].astype(str).tolist() if not categories.empty else []); cat=st.selectbox("Категория материала",cat_options,key="manual_receipt_category")
+            manual=materials.copy()
             if cat=="Без категории": manual=manual[manual["category_id"].isna()].copy()
             elif cat!="Все категории": manual=manual[manual["category_name"].fillna("").astype(str).eq(cat)].copy()
             mdf=manual[["id","name","unit_name"]].copy(); mdf.insert(0,"Выбрать",False); mdf["Количество"]=0.0; mdf["Цена"]=0.0; mdf.columns=["Выбрать","ID","Материал","Единица","Количество","Цена"]
             default_supplier_name="ООО «Поставщик»"
             supplier_options=[default_supplier_name]+list(smap.keys()) if default_supplier_name not in smap else list(smap.keys())
-            supplier=st.selectbox("Поставщик",supplier_options,key="manual_receipt_supplier")
+            with filter_supplier_col:
+                supplier=st.selectbox("Поставщик",supplier_options,key="manual_receipt_supplier")
             with st.form("manual_receipt_form",clear_on_submit=False):
                 edited=st.data_editor(mdf,key="manual_receipt_editor",width="stretch",hide_index=True,column_config={"Выбрать":st.column_config.CheckboxColumn("Выбрать"),"ID":st.column_config.NumberColumn("ID",disabled=True),"Материал":st.column_config.TextColumn("Материал",disabled=True),"Единица":st.column_config.TextColumn("Единица",disabled=True),"Количество":st.column_config.NumberColumn("Количество",min_value=0.0,step=0.01,format="%.2f"),"Цена":st.column_config.NumberColumn("Цена",min_value=0.0,step=0.01,format="%.2f")},disabled=["ID","Материал","Единица"])
                 execute=st.form_submit_button("Выполнить приход",use_container_width=True)

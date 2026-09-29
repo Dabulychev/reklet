@@ -34,12 +34,14 @@ def select_object_by_customer(prefix):
         for _, r in client_rows.iterrows()
     ]
 
-    selected_client = st.selectbox(
-        "Заказчик",
-        ["— Выберите заказчика —"] + client_options,
-        index=0,
-        key=f"{prefix}_customer_select"
-    )
+    filter_customer_col, filter_object_col = st.columns(2, gap="small")
+    with filter_customer_col:
+        selected_client = st.selectbox(
+            "Заказчик",
+            ["— Выберите заказчика —"] + client_options,
+            index=0,
+            key=f"{prefix}_customer_select"
+        )
 
     if selected_client == "— Выберите заказчика —":
         st.info("Сначала выберите заказчика.")
@@ -59,12 +61,13 @@ def select_object_by_customer(prefix):
         for _, r in client_objects.iterrows()
     ]
 
-    selected_object = st.selectbox(
-        "Объект",
-        ["— Выберите объект —"] + object_options,
-        index=0,
-        key=f"{prefix}_object_select_{client_id}"
-    )
+    with filter_object_col:
+        selected_object = st.selectbox(
+            "Объект",
+            ["— Выберите объект —"] + object_options,
+            index=0,
+            key=f"{prefix}_object_select_{client_id}"
+        )
 
     if selected_object == "— Выберите объект —":
         st.info("Теперь выберите объект.")
@@ -622,11 +625,13 @@ def _render_object_management():
                 clients["name"].fillna("").astype(str).str.strip().loc[lambda x: x != ""].sort_values().unique().tolist()
                 if not clients.empty else []
             )
-            selected_client = st.selectbox(
-                "Заказчик",
-                client_options,
-                key="management_client_filter"
-            )
+            filter_customer_col, filter_object_col = st.columns(2, gap="small")
+            with filter_customer_col:
+                selected_client = st.selectbox(
+                    "Заказчик",
+                    client_options,
+                    key="management_client_filter"
+                )
 
             filtered_objects = objects.copy()
             if selected_client != "Все заказчики":
@@ -647,11 +652,12 @@ def _render_object_management():
                 object_map = {
                     label: int(label.split(" — ")[0]) for label in object_options
                 }
-                selected_object_label = st.selectbox(
-                    "Объект",
-                    object_options,
-                    key="management_object_filter"
-                )
+                with filter_object_col:
+                    selected_object_label = st.selectbox(
+                        "Объект",
+                        object_options,
+                        key="management_object_filter"
+                    )
                 object_id = object_map[selected_object_label]
                 object_row = filtered_objects[filtered_objects["id"] == object_id].iloc[0]
 
