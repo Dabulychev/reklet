@@ -4,7 +4,6 @@ import streamlit as st
 from core.db import run_query, run_transaction
 from core.formatting import safe_int
 from core.printing import render_print_html
-from core.instructions import render_page_instruction
 from database.migrations import ensure_stage_movement_tables
 from repositories.objects import get_stage_objects
 
@@ -42,7 +41,7 @@ def render_finished_goods():
         if selected_object == "Все объекты":
             overview_query = """
                 SELECT o.id AS object_id, o.object_name, c.name AS client_name,
-                       oi.id AS object_item_id, oi.item_name, oi.quantity_needed,
+                       oi.item_name, oi.quantity_needed,
                        COALESCE(oi.qty_ready,0) AS qty_ready
                 FROM reklet.object_items oi
                 JOIN reklet.objects o ON o.id=oi.object_id
@@ -130,4 +129,3 @@ def render_finished_goods():
         finished_movement_view = movements[["Объект","Заказчик","Изделие","Операция","Количество","Когда"]].copy()
         st.dataframe(finished_movement_view, width="stretch", hide_index=True)
         render_print_html("Движения по складу готовой продукции", finished_movement_view, "print_finished_goods_movements")
-    render_page_instruction("finished_goods")
