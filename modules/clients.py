@@ -60,10 +60,11 @@ def render_clients():
         st.info("Клиентов нет.")
     else:
         display = clients[
-            ["id", "name", "phone", "address", "email", "website", "notes"]
-        ].copy()
+            ["name", "phone", "address", "email", "website", "notes"]
+        ].copy().reset_index(drop=True)
+        display.insert(0, "№ п.п", range(1, len(display) + 1))
         display.columns = [
-            "ID",
+            "№ п.п",
             "Наименование",
             "Телефон",
             "Адрес",
@@ -79,14 +80,7 @@ def render_clients():
     # Строка всегда видна. Без конкретного клиента она неактивна;
     # после выбора клиента раскрывается рабочее окно.
     # ========================================================
-    if selected_client_id is None or clients.empty:
-        st.button(
-            "Корректировка клиента",
-            key="client_correction_placeholder",
-            disabled=True,
-            use_container_width=True,
-        )
-    else:
+    if selected_client_id is not None and not clients.empty:
         row = clients[clients["id"] == selected_client_id].iloc[0]
         with st.expander("Корректировка клиента", expanded=False):
             pending_key = f"client_edit_pending_{selected_client_id}"
