@@ -634,6 +634,7 @@ def render_reports():
                 "Отчёт по доставкам",
                 "Отчёт по монтажу",
                 "Незавершённые объекты",
+                "Смета объекта",
             ],
             key="operational_report"
         )
@@ -665,6 +666,103 @@ def render_reports():
             operational_view = report_df[["object_name","client_name","item_name","quantity_needed","qty_installed"]].rename(columns={"object_name":"Объект","client_name":"Заказчик","item_name":"Изделие","quantity_needed":"Запланировано","qty_installed":"Установлено"})
             st.dataframe(operational_view, width="stretch", hide_index=True)
             render_print_html("Отчёт по монтажу", operational_view, "print_operational_installation")
+        elif operational == "Смета объекта":
+            st.subheader("Смета объекта (Себестоимость)")
+
+            estimate_options = (
+                report_df[["object_id", "object_name", "client_name"]]
+                .drop_duplicates()
+                .sort_values(["client_name", "object_name"], na_position="last")
+            )
+            estimate_labels = [
+                f"{int(row['object_id'])} — {row['object_name']}"
+                for _, row in estimate_options.iterrows()
+            ]
+            selected_estimate = st.selectbox(
+                "Объект",
+                estimate_labels,
+                key="operational_estimate_object"
+            )
+            estimate_object_id = int(selected_estimate.split(" — ", 1)[0])
+            estimate = report_df[report_df["object_id"] == estimate_object_id].copy()
+
+            client_name = str(estimate["client_name"].iloc[0] or "") if not estimate.empty else ""
+            object_name = str(estimate["object_name"].iloc[0] or "") if not estimate.empty else ""
+
+            st.markdown(f"**Заказчик:** {escape(client_name)}")
+            st.markdown(f"**Объект:** {escape(object_name)}")
+
+            estimate_rows = []
+            item_number = 1
+
+            for _, row in estimate.iterrows():
+                quantity = float(row["quantity_needed"])
+                unit_cost = float(row["material_unit_cost"])
+                total_cost = float(row["Материалы"])
+                estimate_rows.append({
+                    "№ п.п.": item_number,
+                    "Наименование": str(row["item_name"] or ""),
+                    "Кол-во": quantity,
+                    "Цена": unit_cost,
+                    "Сумма": total_cost,
+                })
+                item_number += 1
+
+            material_total = float(estimate["Материалы"].sum())
+            production_total = material_total * 0.50
+            transport_total = material_total * 0.10 + float(estimate["distance_km"].iloc[0]) * 2
+            installation_total = material_total * 0.40
+
+            estimate_rows.extend([
+                {
+                    "№ п.п.": item_number,
+                    "Наименование": "Производство",
+                    "Кол-во": 1,
+                    "Цена": production_total,
+                    "Сумма": production_total,
+                },
+                {
+                    "№ п.п.": item_number + 1,
+                    "Наименование": "Транспортировка",
+                    "Кол-во": 1,
+                    "Цена": transport_total,
+                    "Сумма": transport_total,
+                },
+                {
+                    "№ п.п.": item_number + 2,
+                    "Наименование": "Монтаж",
+                    "Кол-во": 1,
+                    "Цена": installation_total,
+                    "Сумма": installation_total,
+                },
+            ])
+
+            estimate_view = pd.DataFrame(estimate_rows, columns=["№ п.п.", "Наименование", "Кол-во", "Цена", "Сумма"])
+            if estimate_view.empty:
+                st.info("В выбранном объекте нет изделий для расчёта сметы.")
+            else:
+                for col in ["Кол-во", "Цена", "Сумма"]:
+                    estimate_view[col] = pd.to_numeric(estimate_view[col], errors="coerce").fillna(0.0)
+                st.dataframe(estimate_view, width="stretch", hide_index=True)
+
+                estimate_total = float(estimate_view["Сумма"].sum())
+                total_view = pd.DataFrame([{"ИТОГО СЕБЕСТОИМОСТЬ ОБЪЕКТА": estimate_total}])
+                st.dataframe(total_view, width="stretch", hide_index=True)
+
+                print_view = estimate_view.copy()
+                print_view.loc[len(print_view)] = {
+                    "№ п.п.": "",
+                    "Наименование": "ИТОГО СЕБЕСТОИМОСТЬ ОБЪЕКТА",
+                    "Кол-во": "",
+                    "Цена": "",
+                    "Сумма": estimate_total,
+                }
+                render_print_html(
+                    "Смета объекта (Себестоимость)",
+                    print_view,
+                    "print_operational_object_estimate",
+                    subtitle=f"Заказчик: {client_name} | Объект: {object_name}",
+                )
         else:
             incomplete = report_df[report_df["qty_installed"] < report_df["quantity_needed"]]
             operational_view = incomplete.groupby(["object_id","object_name","client_name"], as_index=False).agg(Запланировано=("quantity_needed","sum"), Выполнено=("qty_installed","sum"), Остаток=("Остаток","sum"))
