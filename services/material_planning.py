@@ -38,7 +38,7 @@ def get_object_material_planning(object_id):
         ),
         historical_demand AS (
             SELECT
-                s.material_id,
+                oimc.material_id,
                 SUM(s.progressed_qty * COALESCE(oimc.quantity_per_unit,0)) AS base_required_quantity,
                 SUM(
                     s.progressed_qty
@@ -49,7 +49,7 @@ def get_object_material_planning(object_id):
             JOIN reklet.object_item_material_costs oimc
               ON oimc.object_item_id=s.object_item_id
             WHERE s.progressed_qty > 0
-            GROUP BY s.material_id
+            GROUP BY oimc.material_id
         ),
         future_demand AS (
             SELECT
