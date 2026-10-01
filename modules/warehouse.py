@@ -156,8 +156,9 @@ def _get_production_requests_open():
         LEFT JOIN reklet.purchase_orders po
           ON po.id=poi.purchase_order_id
          AND po.status<>'cancelled'
-        WHERE r.status IN ('sent','purchasing','ready')
-          AND r.quantity_supplied < r.quantity_requested
+       WHERE r.status IN ('sent','purchasing','ready')
+  AND ROUND(r.quantity_supplied::numeric, 6)
+      < ROUND(r.quantity_requested::numeric, 6)
         GROUP BY
             r.id,r.object_id,r.object_item_id,r.material_id,
             c.name,o.object_name,oi.item_name,m.name,u.name,
