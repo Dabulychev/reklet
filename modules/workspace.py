@@ -22,6 +22,51 @@ def _fmt_qty(value, decimals=2):
         return "0.00"
 
 
+
+def _render_create_object_workspace():
+    clients = get_clients()
+    client_map = {str(row["name"]): int(row["id"]) for _, row in clients.iterrows()} if not clients.empty else {}
+    st.markdown("#### Создать новый объект")
+    if not client_map:
+        st.warning("Сначала необходимо создать заказчика.")
+        return
+
+    with st.form("workspace_create_object"):
+        client_name = st.selectbox("Заказчик", list(client_map.keys()))
+        object_name = st.text_input("Название объекта")
+        address = st.text_input("Адрес объекта")
+        phone = st.text_input("Телефон")
+        contact_person = st.text_input("Контактное лицо")
+        notes = st.text_area("Примечания")
+        c1, c2 = st.columns(2)
+        with c1:
+            distance = st.number_input("Расстояние до объекта (км)", min_value=0.0, value=0.0)
+            contract_date = st.date_input("Дата договора", value=None)
+            production_start = st.date_input("Начало производства", value=None)
+            production_end = st.date_input("Окончание производства", value=None)
+        with c2:
+            installation_date = st.date_input("Дата монтажа", value=None)
+            installation_end = st.date_input("Окончание монтажа", value=None)
+
+        if st.form_submit_button("Создать объект", use_container_width=True):
+            if not object_name.strip():
+                st.warning("Необходимо указать название объекта.")
+                return
+            run_query(
+                """
+                INSERT INTO reklet.objects
+                (client_id, object_name, address, phone, contact_person, notes,
+                 transport_distance_km, delivery_cost, contract_date,
+                 production_start_date, production_end_date, installation_date, installation_end_date)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,0,%s,%s,%s,%s,%s)
+                """,
+                (client_map[client_name], object_name.strip(), address or None, phone or None,
+                 contact_person or None, notes or None, distance,
+                 contract_date, production_start, production_end, installation_date, installation_end)
+            )
+            st.success("Объект создан.")
+            st.rerun()
+
 def _get_selected_object():
     objects = get_objects().sort_values("id", ascending=False).copy()
     clients = get_clients()
@@ -762,6 +807,9 @@ def render_workspace():
 
     st.header("Рабочее место")
     st.caption("Вся работа по заказу выполняется из одного контекста: заказчик → объект → изделие.")
+
+    with st.expander("Создать новый объект", expanded=False):
+        _render_create_object_workspace()
 
     object_id, object_row = _get_selected_object()
     if object_id is None:
