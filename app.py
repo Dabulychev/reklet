@@ -1,6 +1,5 @@
 import streamlit as st
 
-from core.ui import render_button_nav
 from database.migrations import ensure_material_planning_tables
 from modules.clients import render_clients
 from modules.objects import render_objects
@@ -178,169 +177,108 @@ except Exception as e:
 
 
 # ============================================================
-# SIMPLE RECTANGULAR NAVIGATION
+# NEW WORKSPACE NAVIGATION
 # ============================================================
-# Navigation uses real Streamlit buttons, not radio widgets.
-# Therefore there are no radio circles/dots and no radio selection
-# animation.  All navigation controls are plain rectangular buttons.
+
+from modules.workspace import render_workspace
+
+
+def render_reference_center():
+    st.subheader("Справочники")
+    options = ["Клиенты", "Изделия", "Склад материалов", "Поставщики"]
+    current = st.session_state.get("reference_section")
+    if current not in options:
+        current = options[0]
+        st.session_state["reference_section"] = current
+    cols = st.columns(len(options), gap="small")
+    for col, option in zip(cols, options):
+        with col:
+            if st.button(option, key=f"reference_{option}", use_container_width=True):
+                st.session_state["reference_section"] = option
+                st.rerun()
+
+    st.markdown("---")
+    section = st.session_state["reference_section"]
+    if section == "Клиенты":
+        render_clients()
+    elif section == "Изделия":
+        render_products()
+    elif section == "Склад материалов":
+        render_warehouse()
+    elif section == "Поставщики":
+        render_suppliers()
+
+
+def render_service_center():
+    st.subheader("Служебные разделы")
+    options = [
+        "Производство", "Готовая продукция", "Транспорт",
+        "Монтаж", "Зарплата", "Отчёты",
+    ]
+    current = st.session_state.get("service_section")
+    if current not in options:
+        current = options[0]
+        st.session_state["service_section"] = current
+    cols = st.columns(3, gap="small")
+    for idx, option in enumerate(options):
+        with cols[idx % 3]:
+            if st.button(option, key=f"service_{option}", use_container_width=True):
+                st.session_state["service_section"] = option
+                st.rerun()
+
+    st.markdown("---")
+    section = st.session_state["service_section"]
+    if section == "Производство":
+        render_production()
+    elif section == "Готовая продукция":
+        render_finished_goods()
+    elif section == "Транспорт":
+        render_transport()
+    elif section == "Монтаж":
+        render_installation()
+    elif section == "Зарплата":
+        render_payroll()
+    elif section == "Отчёты":
+        render_reports()
+
+
 st.markdown("""
 <style>
+.reklet-work-nav {
+    margin-bottom: 0.35rem;
+}
 .stButton > button {
     border-radius: 0 !important;
     box-shadow: none !important;
     transition: none !important;
     animation: none !important;
     transform: none !important;
-    min-height: 38px !important;
-    padding: 0.35rem 0.75rem !important;
-    font-weight: 400 !important;
-}
-.stButton > button:hover,
-.stButton > button:focus,
-.stButton > button:active {
-    border-radius: 0 !important;
-    box-shadow: none !important;
-    transition: none !important;
-    animation: none !important;
-    transform: none !important;
-}
-
-/* ===== Управление объектами: визуальное разделение этапов ===== */
-.stage-guide {
-    margin: 0.35rem 0 0.85rem 0;
-    border: 1px solid rgba(120,140,165,.35);
-    border-radius: 4px;
-    overflow: hidden;
-    background: rgba(20,25,35,.18);
-}
-.stage-title {
-    padding: .55rem .8rem;
-    font-size: .86rem;
-    font-weight: 700;
-    letter-spacing: .03em;
-}
-.stage-groups {
-    display: grid;
-    grid-template-columns: 16% 12% 14% 21% 14% 23%;
-    min-height: 58px;
-}
-.stage-spacer, .stage-group {
-    padding: .55rem .45rem;
-    border-right: 1px solid rgba(100,120,145,.35);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    text-align: center;
-}
-.stage-spacer {
-    text-align: left;
-    font-weight: 600;
-    background: rgba(100,120,145,.10);
-}
-.stage-group b { font-size: .84rem; }
-.stage-group span { font-size: .70rem; opacity: .78; margin-top: .18rem; }
-.stage-order { background: rgba(80,120,190,.10); }
-.stage-production { background: rgba(80,160,220,.12); }
-.stage-warehouse { background: rgba(70,175,175,.11); }
-.stage-transport { background: rgba(210,170,70,.12); }
-.stage-installation { background: rgba(80,165,100,.12); border-right: 0; }
-.stage-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: .7rem 1.1rem;
-    padding: .48rem .75rem;
-    border-top: 1px solid rgba(100,120,145,.30);
-    font-size: .74rem;
-}
-.legend-system { color: #2b75d6; }
-.legend-action { color: #218c45; }
-.legend-flow { opacity: .78; }
-
-/* Make the data editor feel like one continuous process table. */
-[data-testid="stDataEditor"] {
-    border-top: 2px solid rgba(100,120,145,.30);
+    min-height: 40px !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
+main_options = ["Рабочее место", "Справочники", "Служебные разделы"]
+if "main_workspace_section" not in st.session_state:
+    st.session_state["main_workspace_section"] = "Рабочее место"
 
-# ============================================================
-# MAIN NAVIGATION
-# ============================================================
-
-menu_options = [
-    "Клиенты",
-    "Объекты",
-    "Изделия",
-    "Склад материалов",
-    "Поставщики",
-    "Производство",
-    "Готовая продукция",
-    "Транспорт и логистика",
-    "Монтаж",
-    "Зарплата",
-    "Отчёты"
-]
-
-menu = render_button_nav(
-    menu_options,
-    "main_menu",
-    "main_nav",
-    columns_per_row=11
-)
+nav_cols = st.columns(3, gap="small")
+for col, option in zip(nav_cols, main_options):
+    with col:
+        if st.button(
+            option,
+            key=f"main_workspace_nav_{option}",
+            use_container_width=True,
+            type="primary" if st.session_state["main_workspace_section"] == option else "secondary",
+        ):
+            st.session_state["main_workspace_section"] = option
+            st.rerun()
 
 st.markdown("---")
 
-
-# ============================================================
-# CLIENTS
-# ============================================================
-
-
-if menu == "Клиенты":
-    render_clients()
-
-# OBJECTS
-# ============================================================
-elif menu == "Объекты":
-    render_objects()
-
-elif menu == "Изделия":
-    render_products()
-
-# MATERIALS WAREHOUSE
-# ============================================================
-
-elif menu == "Склад материалов":
-    render_warehouse()
-
-# SUPPLIERS
-# ============================================================
-elif menu == "Поставщики":
-    render_suppliers()
-
-# PRODUCTION
-# ============================================================
-
-elif menu == "Производство":
-    render_production()
-
-elif menu == "Готовая продукция":
-    render_finished_goods()
-
-elif menu == "Транспорт и логистика":
-    render_transport()
-
-elif menu == "Монтаж":
-    render_installation()
-
-
-# SALARY
-# ============================================================
-elif menu == "Зарплата":
-    render_payroll()
-
-# REPORTS
-# ============================================================
-elif menu == "Отчёты":
-    render_reports()
+if st.session_state["main_workspace_section"] == "Рабочее место":
+    render_workspace()
+elif st.session_state["main_workspace_section"] == "Справочники":
+    render_reference_center()
+else:
+    render_service_center()

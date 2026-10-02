@@ -394,7 +394,6 @@ def _render_object_data(object_id):
                                         (SELECT COUNT(*) FROM reklet.transport_transactions WHERE object_id=%s) AS transport_transactions,
                                         (SELECT COUNT(*) FROM reklet.installation_transactions WHERE object_id=%s) AS installation_transactions,
                                         (SELECT COUNT(*) FROM reklet.material_transactions WHERE object_id=%s) AS material_transactions,
-                                        (SELECT COUNT(*) FROM reklet.material_reservations WHERE object_id=%s) AS material_reservations,
                                         (SELECT COUNT(*) FROM reklet.purchase_order_items WHERE object_id=%s) AS purchase_order_items,
                                         (SELECT COUNT(*) FROM reklet.material_consumption WHERE object_id=%s) AS material_consumption
                                     """,
@@ -410,7 +409,6 @@ def _render_object_data(object_id):
                                     "transport_transactions": "история транспортировки",
                                     "installation_transactions": "история монтажа",
                                     "material_transactions": "движения материалов по объекту",
-                                    "material_reservations": "резерв материалов по объекту",
                                     "purchase_order_items": "закупки материалов по объекту",
                                     "material_consumption": "списание материалов в производстве",
                                 }
